@@ -13,6 +13,8 @@ class SolidGrid {
     c.push([x, z, r]);
   }
   clear() { this.cells.clear(); }
+  /** keeps only the solids keep() says yes to */
+  filter(keep: (x: number, z: number) => boolean) { for (const [k, l] of this.cells) this.cells.set(k, l.filter(([x, z]) => keep(x, z))); }
   /** any solid within its radius (plus pad) of x, z */
   at(x: number, z: number, pad = 0) {
     const i0 = Math.floor((x - 4) / CELL), i1 = Math.floor((x + 4) / CELL), j0 = Math.floor((z - 4) / CELL), j1 = Math.floor((z + 4) / CELL);

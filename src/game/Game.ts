@@ -13,7 +13,8 @@ import { buildCoin, buildObstacle, buildRider, OBSTACLES, taxi, trotro, type Bik
 import type { Track } from './track';
 import { groundFrom, groundHeight, inStairs, layerHeight } from './relief';
 import { deckAt } from './cutplan';
-import { Tufts } from './tufts';
+import { RoadEdges, edgeLift, onEdges } from './roadedges';
+import { SOLIDS } from './solids';
 import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
 import { AREAS, buildingAt, buildingNear, mapBounds, roadAt } from './campusmap';
 import { inPassage, solidAt } from './solids';
@@ -255,6 +256,8 @@ function slopePitch(x: number, z: number, yaw: number, y?: number) {
 /** A student walking along the pavement: scenery, not an obstacle. */
 interface Walker {
   mesh: THREE.Object3D;
+  /** up on a sidewalk */
+  lift: number;
   d: number;
   x: number;
   v: number;
@@ -294,6 +297,9 @@ const inPts = (pts: Float32Array, x: number, z: number) => {
  */
 function freeBlocked(x: number, z: number) {
   if (inStairs(x, z)) return true;
+  // the roads, gutters and sidewalks (roadedges.ts) are open ground: the bike rides over them (the campus's trees that
+  // stood where they now run are gone, and so must their trunks be from the collision raster)
+  if (onEdges(x, z)) return false;
   // trunks, posts and what the models draw at bike height (walls, fences, parked cars, planters) stop it everywhere,
   // on the roads too; the map's building outlines only off the roads (some reach a little over a road's edge)
   if (solidAt(x, z, 0.3) || meshBlocked(x, z)) return true;
@@ -328,8 +334,8 @@ export class Game {
   readonly camera: THREE.PerspectiveCamera;
   /** the converted campus, streamed round the camera */
   readonly campus: Campus;
-  /** grass tufts and wild flowers round the camera */
-  private tufts: Tufts;
+  /** the roads' asphalt, gutters and sidewalks round the camera (roadedges.ts) */
+  private edges: RoadEdges;
   private cine = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
   private rider: RiderRig;
   private route: Route = CAMPUS_LOOP;
@@ -483,11 +489,14 @@ export class Game {
     this.engine.world.addChild(this.scene.entity);
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
     this.campus = new Campus(this.engine);
+    // the campus's trees and posts that would stand in the widened roads and their sidewalks are left out (roadedges.ts)
+    this.campus.dropInstance = (x, z) => onEdges(x, z, 0.4);
     // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
     nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
 
-    this.tufts = new Tufts(lowEnd);
-    this.scene.add(this.tufts.group);
+    // (no grass tufts: the owner's corrections, 2026-10-18)
+    this.edges = new RoadEdges();
+    this.scene.add(this.edges.group);
     this.setRoute(CAMPUS_LOOP);
     this.scene.add(this.dynamic);
 
@@ -525,6 +534,10 @@ export class Game {
     const p = this.pose(this.d);
     this.campus.onProgress = (f) => this.progress(0.95 * f);
     await Promise.all([this.campus.preload(p.x, p.z, this.lowEnd ? 200 : 260), loadCollision()]);
+    // (and so are their trunks, for the free ride)
+    SOLIDS.filter((x, z) => !onEdges(x, z, 0.4));
+    // (the road edges round the start, once the collision data is in: they keep clear of walls)
+    this.edges.preload(p.x, p.z);
     T('campus', t0);
     this.progress(1);
     this.isReady = true;
@@ -538,7 +551,6 @@ export class Game {
     if (q === this.quality) return;
     this.quality = q;
     this.engine.sun.light!.castShadows = q === 'high';
-    this.tufts.setLow(q === 'low');
     this.engine.device.maxPixelRatio = q === 'low' ? Math.min(devicePixelRatio, 1) : Math.min(devicePixelRatio, 1.5);
     this.engine.app.resizeCanvas();
     this.resize();
@@ -561,9 +573,6 @@ export class Game {
     }
     this.route = route;
     this.track = route.track;
-    // grass tufts keep off the route's road and pavements (they follow the mapped roads, which a route's wider road
-    // and rounded bends overrun: owner, tufts on the road from Pent to the engineering school)
-    this.tufts.setRoute((x, z) => route.track.distanceToRoad(x, z) < ROAD_HALF + 2.0);
     this.routeLayer = buildRouteLayer(route.track, {
       start: route.lead,
       finish: route.lead + route.length,
@@ -1154,7 +1163,7 @@ export class Game {
     const sgn = f.v < 0 ? -1 : 1, fx = hx * sgn, fz = hz * sgn;
     // uphill slows, downhill rolls on
     // (the ground at the level it is on: over the Legon Road cutting a bridge deck and the road below share x, z)
-    const g0 = groundFrom(f.x, f.z, f.y), G = (x: number, z: number) => groundFrom(x, z, g0);
+    const g0 = groundFrom(f.x, f.z, f.y), G = (x: number, z: number) => groundFrom(x, z, g0) + edgeLift(x, z);
     if (f.v > 0.2) f.v = Math.max(0, Math.min(top * 1.3, f.v - 9.8 * 0.6 * ((G(f.x + hx, f.z + hz) - g0) / 1) * dt));
     // move, sliding along whatever is in the way; a wall or a bank too steep to ride stops the bike
     if (!bounds) bounds = mapBounds();
@@ -1294,7 +1303,6 @@ export class Game {
       const f = this.guest.focus;
       this.rider.root.position.set(f.x, groundHeight(f.x, f.z), f.z);
       this.wfx?.update(dt, cam);
-      this.tufts.update(cam.position.x, cam.position.z);
       this.draw(cam);
       return;
     }
@@ -1536,7 +1544,7 @@ export class Game {
       mesh.traverse((o) => { o.castShadow = false; });
       mesh.visible = false;
       this.dynamic.add(mesh);
-      this.walkers.push({ mesh, d: -1e9, x: 0, v: 0, t: Math.random() * 6 });
+      this.walkers.push({ mesh, d: -1e9, x: 0, v: 0, t: Math.random() * 6, lift: 0 });
     }
     const spread = this.phase === 'showcase' || this.walkers.every((w) => !w.mesh.visible);
     for (let i = 0; i < this.walkers.length; i++) {
@@ -1545,16 +1553,17 @@ export class Game {
       if (!w.mesh.visible && i < want) {
         // respawn: spread around at first, later far ahead where it can't pop into view
         const d = this.d + (spread ? -20 + Math.random() * 200 : 90 + Math.random() * 110);
-        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF + 0.4 + Math.random() * 1.0);
+        // (on the sidewalk: past the lip and the gutter, roadedges.ts)
+        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF * 1.5 + 1.3 + Math.random() * 1.3);
         const p = this.pose(d, x);
         if (d >= end || d < -this.route.lead + 2 || buildingAt(p.x, p.z, 0.6) || this.track.distanceToRoad(p.x, p.z) < ROAD_HALF + 0.3) continue;
-        Object.assign(w, { d, x, v: (Math.random() < 0.5 ? -1 : 1) * (1.1 + Math.random() * 0.5) });
+        Object.assign(w, { d, x, v: (Math.random() < 0.5 ? -1 : 1) * (1.1 + Math.random() * 0.5), lift: edgeLift(p.x, p.z) });
         w.mesh.visible = true;
       }
       if (!w.mesh.visible) continue;
       w.d += w.v * dt;
       w.t += dt * 7;
-      this.place(w.mesh, w.d, w.x, 0.12 + Math.abs(Math.sin(w.t)) * 0.05, w.v < 0 ? Math.PI : 0);
+      this.place(w.mesh, w.d, w.x, w.lift + 0.02 + Math.abs(Math.sin(w.t)) * 0.05, w.v < 0 ? Math.PI : 0);
       w.mesh.rotation.z = Math.sin(w.t) * 0.04;
     }
   }
@@ -2168,13 +2177,13 @@ export class Game {
     }
     // (the sun's cascaded shadows follow the camera by themselves)
     this.wfx?.update(dt, cam);
-    this.tufts.update(cam.position.x, cam.position.z);
     this.draw(cam);
   }
 
   /** streams the campus round the camera, turns the labels to it and asks PlayCanvas for this frame */
   private draw(cam: THREE.PerspectiveCamera) {
     this.campus.update(cam.position.x, cam.position.z);
+    this.edges.update(cam.position.x, cam.position.z);
     THREE.Sprite.face(this.engine.camera);
     this.engine.app.renderNextFrame = true;
   }

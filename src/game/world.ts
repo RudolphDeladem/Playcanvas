@@ -289,48 +289,8 @@ export function buildRouteLayer(track: Track, o: RouteLayerOptions) {
       road.receiveShadow = true;
       group.add(road);
     }
-    const white = groundMat('#e9e6dc', 6);
-    for (const s of [-1, 1]) {
-      const [a, c] = [s * (ROAD_HALF - 0.27), s * (ROAD_HALF - 0.13)].sort((u, v) => u - v);
-      for (const [d0, d1] of lined) group.add(new THREE.Mesh(ribbon(track, a, 0, c, 0, d0, d1, 8, 4), white));
-    }
-    const conc = concreteTexture();
-    conc.repeat.set(1, 4);
-    const walkMat = wettable(new THREE.MeshStandardMaterial({ map: conc, roughness: 0.95, side: THREE.DoubleSide }));
-    // the pavements stop where another road joins or crosses the route: a kerb across its mouth would block it
-    const gaps = walkGaps(track, ROAD_HALF, ROAD_WIDTH).map((g, i) => [...g, ...stairs, ...plain, ...owned[i]]);
-    for (const s of [-1, 1]) {
-      const a = s * ROAD_HALF, c = s * (ROAD_HALF + 1.6);
-      for (const [d0, d1] of openRuns(gaps[s > 0 ? 1 : 0], L)) {
-        const top = s > 0 ? ribbon(track, a, 0.12, c, 0.12, d0, d1) : ribbon(track, c, 0.12, a, 0.12, d0, d1);
-        const curb = s > 0 ? ribbon(track, a, 0, a, 0.12, d0, d1) : ribbon(track, a, 0.12, a, 0, d0, d1);
-        const walk = new THREE.Mesh(top, walkMat);
-        walk.receiveShadow = true;
-        group.add(walk, new THREE.Mesh(curb, walkMat));
-        // a kerb face closes each end of the pavement: at a gap, and where the route itself ends (riding on past the
-        // destination the pavement, which belongs to the route, otherwise stopped open, as if a piece were missing)
-        for (const d of [d0, d1]) {
-          const p = track.pose(d, s * (ROAD_HALF + 0.8));
-          // on a tight bend the pavement's end can fall on the road itself: no kerb face there
-          if (track.distanceToRoad(p.x, p.z) < ROAD_HALF + 0.3) continue;
-          const cap = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.12, 0.04), walkMat);
-          cap.position.set(p.x, 0.06, p.z);
-          cap.rotation.y = p.yaw;
-          group.add(cap);
-        }
-      }
-    }
-    const dashCount = Math.floor(L / 9);
-    const dashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.14, 3).rotateX(-Math.PI / 2), white, dashCount * 2);
-    let i = 0;
-    for (const x of [-1.2, 1.2]) {
-      for (let k = 0; k < dashCount; k++) {
-        const d = k * 9 + 4;
-        m.compose(at(d, x, 0.01), q.setFromAxisAngle(up, yawAt(d)), onStairs(d) || onPlain(d) ? new THREE.Vector3(0, 0, 0) : one);
-        dashes.setMatrixAt(i++, m);
-      }
-    }
-    group.add(dashes);
+    // (no edge lines, lane dashes or concrete pavements of its own any more: every main road now has its asphalt, dashed
+    // centre line, lip, gutter and herringbone sidewalk, roadedges.ts; the owner's corrections, 2026-10-18)
   }
 
   // trees and lamps along the route, kept off buildings and off the road on tight bends

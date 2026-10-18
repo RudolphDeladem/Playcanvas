@@ -24,6 +24,8 @@ interface LoadedTile { key: string; info: TileInfo; root: pc.Entity; lodNodes: {
 
 export class Campus {
   readonly ready: Promise<void>;
+  /** instanced parts (trees, posts) left out where this says so: the game's widened roads and sidewalks */
+  dropInstance?: (x: number, z: number) => boolean;
   /** called with 0..1 while the first tiles round the start load */
   onProgress?: (p: number) => void;
   manifest!: Manifest;
@@ -334,6 +336,7 @@ export class Campus {
         // matrices only
         const groups = new Map<string, number[]>();
         for (let i = 0; i < h.n; i++) {
+          if (this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14])) continue;
           const k = `${icol[i * 4] >> 3},${icol[i * 4 + 1] >> 3},${icol[i * 4 + 2] >> 3}`;
           let l = groups.get(k); if (!l) groups.set(k, (l = [])); l.push(i);
         }

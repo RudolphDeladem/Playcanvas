@@ -53,3 +53,27 @@ nothing was invented.
 | Paystack coins, prize race, wallet | [ORIGINAL: INCOMPLETE, switched off] | same (off) |
 | Football and tennis games | [ORIGINAL: NOT implemented, DECISION: separate] | not implemented |
 | 10,000+ concurrent players | [ORIGINAL: target only] | target only |
+
+## Corrections in this version (not in the original)
+
+**2026-10-18, the owner's road corrections** (photos of campus roads and sidewalks) — `src/game/roadedges.ts`:
+
+- **Roads**: the main roads (classes 0–2) are 1.5 times as wide as the map has them (the owner: "too thin for 2
+  cars"): at least 5.85 m each side of the centre line. Smooth asphalt with rounded corners where roads meet and
+  rounded joins where a road bends; a dashed white centre line kept clear of junctions; the campus's old, narrower
+  road and its markings are covered. No grass reaches the road: the asphalt runs up to the gutter.
+- **Sidewalks**: along both sides of every main road, from the road out — a concrete lip (0.18 m), an open gutter
+  (0.6 m), a white stone kerb a little above the sidewalk (0.18 m), a sidewalk of grey concrete pavers in herringbone
+  (2 m), a concrete edging. Where a service lane or a hall's road joins, the sidewalk opens; where a footpath meets
+  the road, the gutter is paved over. The sidewalk follows corners round junctions.
+- **Not drawn**: on roads into halls (unnamed roads within 90 m of a hall: Pent, Evandy and the others), on service
+  lanes (neither widened), where a site models its own edges (Okponglo, IPS Road, the J.J. Rawlings yard and the other
+  `ownsEdges` sites), on the NSIA Road's and the Kuffour Quadrangle's plain stretches, on earth and brick roads, in the
+  Legon Road cutting, on stairs, and through buildings or walls.
+- **Trees** of the converted campus that would stand in the widened roads or their sidewalks are left out (and their
+  trunks from the free ride's collision).
+- **Races** keep their route road but no longer draw their own concrete pavements, edge lines or lane dashes (the
+  roads have their own now). Walkers walk on the sidewalks; a free-ridden bike rides over the roads and sidewalks.
+- **Grass tufts** removed from the whole game.
+- **Cost**: built round the camera at run time (about 10 ms a 64 m piece, a few milliseconds a frame), merged into
+  128 m tiles of one mesh a material: about 6 draw calls a tile, some 15–25 tiles in view.
