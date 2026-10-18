@@ -1,0 +1,1 @@
+export{n as createClient}from"./supabase-D0zxBqh3.js";

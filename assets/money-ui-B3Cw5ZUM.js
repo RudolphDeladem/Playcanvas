@@ -1,0 +1,1 @@
+export{u as notice}from"./money-ui-DWvBBfNX.js";

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#0a1020" />
+    <link rel="icon" href="../icons/icon.svg" type="image/svg+xml" />
+    <title>Legon Geography Inspector</title>
+    <style>:root{--bg:#0a1020;--panel:#0c1222eb;--line:#26314d;--text:#e8ecf5;--muted:#9aa6bf;--accent:#f5c518}*{box-sizing:border-box}html,body{background:var(--bg);height:100%;color:var(--text);margin:0;font:13px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}#map{touch-action:none;cursor:grab;width:100%;height:100%;position:fixed;inset:0}#map.drag{cursor:grabbing}.panel{background:var(--panel);border:1px solid var(--line);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);border-radius:10px;position:fixed}#side{width:290px;max-height:calc(100% - 24px);padding:12px 14px;top:12px;left:12px;overflow:auto}#side h1{letter-spacing:.02em;margin:0 0 2px;font-size:15px}#side h1 b{color:var(--accent)}#side .sub{color:var(--muted);margin-bottom:10px;font-size:12px}#side h2{text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px;font-size:11px}label.layer{cursor:pointer;align-items:center;gap:8px;padding:3px 0;display:flex}label.layer i{border-radius:2px;flex:none;width:14px;height:10px;display:inline-block}label.layer span.n{color:var(--muted);font-variant-numeric:tabular-nums;margin-left:auto}input[type=range]{width:100%}input[type=search]{border:1px solid var(--line);width:100%;color:var(--text);background:#0d1529;border-radius:6px;padding:6px 8px}#lm{max-height:240px;margin:6px 0 0;padding:0;list-style:none;overflow:auto}#lm li,#entList li{cursor:pointer;border-radius:5px;align-items:center;gap:6px;padding:4px 6px;display:flex}#lm li:hover,#entList li:hover{background:#18223d}#lm li i,#entList li i{border-radius:50%;flex:none;width:8px;height:8px}#info{width:300px;padding:12px 14px;display:none;top:12px;right:12px}#info h3{margin:0 0 4px;font-size:14px}#info .k{color:var(--muted)}#info a{color:#8ab4f8;margin-right:10px}#info button{color:var(--muted);cursor:pointer;background:0 0;border:0;font-size:18px;position:absolute;top:6px;right:8px}#status{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;text-overflow:ellipsis;max-width:calc(100% - 24px);padding:6px 12px;bottom:12px;left:50%;overflow:hidden;transform:translate(-50%)}#status b{color:var(--text);font-weight:600}#toggle{display:none}.legend{color:var(--muted);font-size:12px}.legend i{vertical-align:-1px;border-radius:50%;width:10px;height:10px;margin:0 4px 0 8px;display:inline-block}@media (width<=640px){#side{width:auto;max-height:55%;display:none;right:12px}#side.open{display:block}#toggle{color:var(--text);font:inherit;cursor:pointer;padding:8px 12px;display:block;position:fixed;top:12px;left:12px}#info{width:auto;inset:auto 12px 56px}}</style>
+    <script type="module" crossorigin src="/Playcanvas/assets/geo-DjNmlb4L.js"></script>
+    <link rel="modulepreload" crossorigin href="/Playcanvas/assets/modulepreload-polyfill-P2Xu9kJm.js">
+    <link rel="modulepreload" crossorigin href="/Playcanvas/assets/campus-map--aYsDhX2.js">
+    <link rel="modulepreload" crossorigin href="/Playcanvas/assets/routes-B4e9xrsk.js">
+  <link rel="manifest" href="/Playcanvas/manifest.webmanifest"></head>
+  <body>
+    <canvas id="map"></canvas>
+    <button id="toggle" class="panel" type="button">Layers</button>
+    <aside id="side" class="panel">
+      <h1>LEGON<b>RUSH</b> geography inspector</h1>
+      <div class="sub">The game map from above, over a Sentinel-2 composite. Drag to pan, scroll or pinch to zoom, click anything for details.</div>
+      <h2>Layers</h2>
+      <div id="layers"></div>
+      <label class="layer" style="display:block;margin-top:6px">Imagery opacity <input id="opacity" type="range" min="0" max="100" value="85" /></label>
+      <h2>Route tester</h2>
+      <div class="legend">The game's own routing. <i style="background:#ffffff"></i>start <i style="background:#2ee66b"></i>arrival <i style="background:#ff3df5"></i>entrance <i style="background:#f5c518"></i>turns</div>
+      <select id="rtPreset" style="width:100%;margin:6px 0;padding:6px;border-radius:6px;background:#0d1529;color:var(--text);border:1px solid var(--line)"><option value="">Representative routes…</option></select>
+      <input id="rtFrom" list="rtPlaces" type="search" placeholder="From" style="margin-bottom:4px" />
+      <input id="rtTo" list="rtPlaces" type="search" placeholder="To" style="margin-bottom:4px" />
+      <datalist id="rtPlaces"></datalist>
+      <div style="display:flex;gap:6px;align-items:center"><select id="rtMode" style="flex:1;padding:6px;border-radius:6px;background:#0d1529;color:var(--text);border:1px solid var(--line)"><option value="cycle">Ride</option><option value="walk">Walk</option><option value="drive">Taxi / shuttle</option></select><button id="rtGo" type="button" style="padding:6px 12px;border-radius:6px;border:0;background:var(--accent);font-weight:700;cursor:pointer">Route</button></div>
+      <div id="rtOut" class="legend" style="margin-top:6px"></div>
+      <h2>Destination entrances</h2>
+      <div class="legend">click to inspect <i style="background:#06d6a0"></i>verified <i style="background:#ffd166"></i>partial <i style="background:#ef476f"></i>unverified</div>
+      <ul id="entList" class="lm-list" style="list-style:none;margin:6px 0 0;padding:0;max-height:220px;overflow:auto"></ul>
+      <h2>Landmarks</h2>
+      <div class="legend">confidence <i style="background:#06d6a0"></i>high <i style="background:#ffd166"></i>medium <i style="background:#ef476f"></i>low</div>
+      <input id="q" type="search" placeholder="Find a landmark or place" style="margin-top:6px" />
+      <ul id="lm"></ul>
+      <h2>Sources</h2>
+      <div class="legend" id="credit"></div>
+    </aside>
+    <div id="info" class="panel"><button type="button" aria-label="Close">×</button><div id="infobody"></div></div>
+    <div id="status" class="panel">Loading…</div>
+  </body>
+</html>

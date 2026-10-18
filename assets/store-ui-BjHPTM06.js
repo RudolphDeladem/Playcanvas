@@ -1,0 +1,1 @@
+export{i as productPage}from"./store-ui-CkpQhomk.js";

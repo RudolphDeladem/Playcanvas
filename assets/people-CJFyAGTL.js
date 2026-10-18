@@ -1,0 +1,1 @@
+export{r as friendsScreen}from"./people-CtPEkvd_.js";
