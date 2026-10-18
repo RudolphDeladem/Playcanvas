@@ -108,7 +108,8 @@ export class Material {
       m.diffuse = new pc.Color(0, 0, 0);
       m.emissive = toSrgbColor(this.color);
       m.emissiveIntensity = 1;
-      m.emissiveMap = v.map ? v.map.pc : null;
+      const lit = this.color.r + this.color.g + this.color.b > 0;
+      m.emissiveMap = v.map && lit ? v.map.pc : null;
       if (v.map) { m.emissiveMapTiling = new pc.Vec2(v.map.repeat.x, v.map.repeat.y); m.emissiveMapOffset = new pc.Vec2(v.map.offset.x, v.map.offset.y); }
       m.emissiveVertexColor = !!v.vertexColors;
     } else {
@@ -120,7 +121,7 @@ export class Material {
       m.emissiveIntensity = v.emissiveIntensity;
       m.diffuseMap = v.map ? v.map.pc : null;
       if (v.map) { m.diffuseMapTiling = new pc.Vec2(v.map.repeat.x, v.map.repeat.y); m.diffuseMapOffset = new pc.Vec2(v.map.offset.x, v.map.offset.y); }
-      m.emissiveMap = v.emissiveMap ? v.emissiveMap.pc : null;
+      m.emissiveMap = v.emissiveMap && this.emissive.r + this.emissive.g + this.emissive.b > 0 ? v.emissiveMap.pc : null;
       m.diffuseVertexColor = !!v.vertexColors;
     }
     m.opacity = v.opacity;
@@ -128,7 +129,8 @@ export class Material {
     m.opacityMap = v.alphaMap ? v.alphaMap.pc : alphaFromMap ? v.map.pc : null;
     m.opacityMapChannel = v.alphaMap ? 'g' : 'a';
     if (alphaFromMap && v.map) { m.opacityMapTiling = new pc.Vec2(v.map.repeat.x, v.map.repeat.y); m.opacityMapOffset = new pc.Vec2(v.map.offset.x, v.map.offset.y); }
-    m.blendType = v.transparent ? (v.blending === AdditiveBlending ? pc.BLEND_ADDITIVE : pc.BLEND_NORMAL) : pc.BLEND_NONE;
+    // (Three.js's additive blending weighs the source by its alpha: PlayCanvas's ADDITIVEALPHA)
+    m.blendType = v.transparent ? (v.blending === AdditiveBlending ? pc.BLEND_ADDITIVEALPHA : pc.BLEND_NORMAL) : v.blending === AdditiveBlending ? pc.BLEND_ADDITIVE : pc.BLEND_NONE;
     m.alphaTest = v.alphaTest;
     m.cull = v.side === DoubleSide ? pc.CULLFACE_NONE : v.side === BackSide ? pc.CULLFACE_FRONT : pc.CULLFACE_BACK;
     m.depthWrite = v.depthWrite;

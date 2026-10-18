@@ -7,7 +7,7 @@ import { mkdirSync } from 'node:fs';
 const [, , out] = process.argv, port = process.env.PORT ?? 5320;
 mkdirSync(out, { recursive: true });
 const b = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
+const p = await b.newPage({ viewport: { width: +(process.env.W ?? 960), height: +(process.env.H ?? 540) } });
 const log = [];
 p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') log.push(`${m.type()}: ${m.text().slice(0, 300)}`); });
 p.on('pageerror', (e) => log.push('PAGEERROR ' + (e.stack ?? e.message).slice(0, 900)));
@@ -27,20 +27,25 @@ await ev(`(async () => {
   const r = await import('/src/game/routes.ts'), cm = await import('/src/game/campusmap.ts'), c = await import('/src/data/campus.ts');
   const g = window.__game, route = r.exploreRoute(cm.placeByName('The Balme Library'), cm.placeByName('Great Hall'));
   g.setRoute(route); g.calm = true; g.pickups = false; g.setWeather('clear'); g.start(c.BIKES[0], false);
+  // (the menus pause the game behind them: ride as the ride screen would)
+  window.__unpause = setInterval(() => { g.paused = false; g.sleep = false; }, 100);
   return { len: Math.round(route.length), kind: route.kind };
 })()`);
-await p.waitForTimeout(14000);
+// (headless Chromium draws on the CPU, a frame or two a second, and the game advances at most 1/20 s a frame: wait on
+// the game's own state, not on the clock)
+const until = (js, s) => p.waitForFunction(js, null, { timeout: s * 1000, polling: 500 }).then(() => at(`reached ${js}`), () => at(`NOT reached in ${s}s: ${js}`));
+await until('window.__game.isRiding && window.__game.d > 60', 600);
 await shot('explore');
-await ev(`(() => { const g = window.__game; return { xz: g.riderXZ.map(Math.round), riding: g.isRiding }; })()`);
-await ev(`(() => { const g = window.__game; g.freeRide(); g.freePedal(); g.freeInput.steer = 0.25; window.__path = []; window.__pt = setInterval(() => window.__path.push(g.riderXZ.map((v) => Math.round(v * 10) / 10)), 500); return g.freeRiding; })()`);
-await p.waitForTimeout(10000);
+await ev(`(() => { const g = window.__game; return { xz: g.riderXZ.map(Math.round), riding: g.isRiding, d: Math.round(g.d) }; })()`);
+await ev(`(() => { const g = window.__game; g.freeRide(); g.freePedal(); g.freeInput.steer = 0.25; window.__path = []; window.__pt = setInterval(() => window.__path.push(g.riderXZ.map((v) => Math.round(v * 10) / 10)), 2000); return g.freeRiding; })()`);
+await until('window.__path.length > 3 && Math.hypot(window.__path.at(-1)[0] - window.__path[0][0], window.__path.at(-1)[1] - window.__path[0][1]) > 25', 600);
 await shot('free');
-await ev(`(() => { clearInterval(window.__pt); const g = window.__game; return { path: window.__path.slice(0, 24), state: g.freeState }; })()`);
+await ev(`(() => { clearInterval(window.__pt); const g = window.__game; return { path: window.__path.filter((_, i) => i % 3 === 0).slice(0, 30), state: g.freeState }; })()`);
 await ev(`(() => { const g = window.__game; g.freeBrake(true); g.freeBrake(false); g.setTimeOfDay('night'); return 1; })()`);
-await p.waitForTimeout(4000);
+await p.waitForTimeout(15000);
 await shot('night');
 await ev(`(() => { const g = window.__game; g.setTimeOfDay('day'); g.cycleCamera(); g.cycleCamera(); return g.cycleCamera(); })()`);
-await p.waitForTimeout(5000);
+await p.waitForTimeout(25000);
 await shot('flyover');
 console.log([...new Set(log)].slice(0, 30).join('\n'));
 await b.close();

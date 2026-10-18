@@ -41,7 +41,28 @@ export function createEngine(canvas: HTMLCanvasElement, opts: { preserveDrawingB
   addEventListener('resize', () => app.resizeCanvas());
   canvas.addEventListener('webglcontextlost', () => console.warn('LEGONRUSH: WebGL context lost (GPU reset or driver timeout)'));
 
+  // fog as the original had it: Three.js mixes the fog colour into the final, tone-mapped sRGB colour; PlayCanvas mixes
+  // it in linear light before tone mapping, which fogs everything visibly more (distant trees and the hills washed out)
+  pc.ShaderChunks.get(app.graphicsDevice, pc.SHADERLANGUAGE_GLSL).set('endPS', `
+	gl_FragColor.rgb = combineColor(litArgs_albedo, litArgs_sheen_specularity, litArgs_clearcoat_specularity);
+	gl_FragColor.rgb += litArgs_emission;
+	gl_FragColor.rgb = toneMap(gl_FragColor.rgb);
+	gl_FragColor.rgb = gammaCorrectOutput(gl_FragColor.rgb);
+	gl_FragColor.rgb = addFog(gl_FragColor.rgb);
+`);
+
+  // the sky is drawn as the original drew it: its shader was not tone mapped (a plain ShaderMaterial), so neither is
+  // the skybox here (tone mapped, the far hills and the haze washed out)
+  {
+    const chunks = pc.ShaderChunks.get(app.graphicsDevice, pc.SHADERLANGUAGE_GLSL);
+    const sky = chunks.get('skyboxPS') as string;
+    chunks.set('skyboxPS', sky.replace('toneMap(processEnvironment(linear))', 'processEnvironment(linear)'));
+  }
+
   const scene = app.scene;
+  // two lights (the sun and the bike's headlight): plain forward lighting. Clustered lighting, PlayCanvas's default for
+  // many lights, cost about 40% of the frame for nothing here (measured with tools/perf.mjs)
+  scene.clusteredLightingEnabled = false;
   scene.fog.type = pc.FOG_LINEAR;
   scene.fog.start = 70;
   scene.fog.end = 340;

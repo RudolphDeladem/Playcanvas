@@ -130,7 +130,8 @@ export class Campus {
       m.gloss = 1 - (r.rough ?? 1);
       m.emissive = srgb(r.emissive);
       m.emissiveIntensity = r.ei ?? 0;
-      if (r.emissiveMap != null) {
+      // (a black emissive colour never shows its map, whatever the intensity: left off)
+      if (r.emissiveMap != null && m.emissive.r + m.emissive.g + m.emissive.b > 0) {
         m.emissiveMap = this.texture(r.emissiveMap);
         const et = this.manifest.textures[r.emissiveMap];
         m.emissiveMapUv = et.channel === 1 ? 1 : 0;
@@ -144,7 +145,7 @@ export class Campus {
       if (r.alphaMap != null) { m.opacityMap = this.texture(r.alphaMap); m.opacityMapChannel = 'g'; setTransform('opacity', this.manifest.textures[r.alphaMap]); }
       else if (map && mapAlpha) { m.opacityMap = map; m.opacityMapChannel = 'a'; setTransform('opacity', tr); }
       if (r.vc && r.transparent) m.opacityVertexColor = false;
-      if (r.transparent) m.blendType = r.blending === 2 ? pc.BLEND_ADDITIVE : pc.BLEND_NORMAL;
+      if (r.transparent) m.blendType = r.blending === 2 ? pc.BLEND_ADDITIVEALPHA : pc.BLEND_NORMAL;
       if (r.alphaTest > 0) m.alphaTest = r.alphaTest;
     }
     m.cull = r.side === 2 ? pc.CULLFACE_NONE : r.side === 1 ? pc.CULLFACE_FRONT : pc.CULLFACE_BACK;
