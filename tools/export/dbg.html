@@ -1,0 +1,7 @@
+<!doctype html><html><body><script type="module">
+import { buildCampus } from '/orig/src/game/world.ts';
+const root = buildCampus(); root.updateMatrixWorld(true);
+const out = { inst: 0, instVis: 0, sample: [] };
+root.traverse((o) => { if (o.isInstancedMesh) { out.inst++; let v = true, q = o; const chain = []; while (q) { chain.push(q.type + (q.visible ? '' : '(hidden)') + (q.name ? ':' + q.name : '')); if (!q.visible) v = false; q = q.parent; } if (v) out.instVis++; if (out.sample.length < 5) out.sample.push({ count: o.count, chain: chain.slice(0, 6), pos: [o.instanceMatrix.array[12], o.instanceMatrix.array[14]], world: [o.matrixWorld.elements[12], o.matrixWorld.elements[14]] }); } });
+window.__stats = out; window.__done = true;
+</script></body></html>

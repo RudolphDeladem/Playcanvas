@@ -1,0 +1,16 @@
+<!doctype html><html><body><script type="module">
+import { buildCampus } from '/orig/src/game/world.ts';
+import { buildLandmarks } from '/orig/src/game/landmarks.ts';
+const roots = [buildCampus(), buildLandmarks()];
+const by = {}; const top = [];
+const path = (o) => { const n = []; let q = o; while (q && n.length < 4) { if (q.name) n.push(q.name); q = q.parent; } return n.reverse().join('/') || o.type; };
+for (const root of roots) root.traverse((o) => {
+  if (!o.isMesh) return;
+  const g = o.geometry, v = g.attributes.position.count, idx = !!g.index, inLod = (() => { let q = o.parent; while (q) { if (q.isLOD) return true; q = q.parent; } return false; })();
+  const key = path(o.parent ?? o).split('/').slice(0, 2).join('/') + (inLod ? ' [LOD]' : '') + (o.isInstancedMesh ? ' [inst]' : '');
+  const e = by[key] ??= { n: 0, v: 0, idx: 0, tex: 0 }; e.n++; e.v += v; if (idx) e.idx++;
+  top.push([v, path(o), o.material?.type, idx, o.isInstancedMesh ? o.count : 0]);
+});
+top.sort((a, b) => b[0] - a[0]);
+window.__stats = { groups: Object.entries(by).sort((a, b) => b[1].v - a[1].v).slice(0, 45), top: top.slice(0, 25) }; window.__done = true;
+</script></body></html>

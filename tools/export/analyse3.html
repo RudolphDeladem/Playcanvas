@@ -1,0 +1,24 @@
+<!doctype html><html><body><script type="module">
+import { buildCampus } from '/orig/src/game/world.ts';
+import { buildLandmarks } from '/orig/src/game/landmarks.ts';
+import { mapBounds } from '/orig/src/game/campusmap.ts';
+const roots = [buildCampus(), buildLandmarks()];
+const st = { instColor: 0, instNoColor: 0, lodDist: {}, hidden: 0, hiddenNames: {}, keys: {}, groups: 0, arrMat: 0, bounds: mapBounds(), texKinds: {}, blend: {}, noNormStd: 0 };
+for (const root of roots) root.traverse((o) => {
+  if (o.isLOD) { const k = o.levels.map((l) => l.distance).join(','); st.lodDist[k] = (st.lodDist[k] ?? 0) + 1; }
+  if (!o.isMesh) return;
+  let vis = true, q = o; while (q) { if (!q.visible) vis = false; q = q.parent; }
+  if (!vis) { st.hidden++; const n = (o.name || o.parent?.name || '?'); st.hiddenNames[n] = (st.hiddenNames[n] ?? 0) + 1; }
+  if (o.isInstancedMesh) { if (o.instanceColor) st.instColor++; else st.instNoColor++; }
+  if (Array.isArray(o.material)) st.arrMat++;
+  if (o.geometry.groups.length) st.groups++;
+  for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+    const k = m.customProgramCacheKey ? String(m.customProgramCacheKey()).replace(/[0-9.]+/g, '#') : '';
+    st.keys[k] = (st.keys[k] ?? 0) + 1;
+    st.blend[m.blending] = (st.blend[m.blending] ?? 0) + 1;
+    if (m.type !== 'MeshBasicMaterial' && !o.geometry.attributes.normal) st.noNormStd++;
+    for (const [p, v] of Object.entries(m)) if (v && v.isTexture) { const kk = p + ':' + (v.image?.constructor?.name ?? 'none'); st.texKinds[kk] = (st.texKinds[kk] ?? 0) + 1; }
+  }
+});
+window.__stats = st; window.__done = true;
+</script></body></html>

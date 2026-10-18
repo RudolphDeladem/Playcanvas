@@ -1,0 +1,27 @@
+<!doctype html><html><body><script type="module">
+import { buildCampus } from '/orig/src/game/world.ts';
+import { buildLandmarks } from '/orig/src/game/landmarks.ts';
+const t0 = performance.now();
+const roots = [buildCampus(), buildLandmarks()];
+const st = { meshes: 0, inst: 0, instCount: 0, lod: 0, tris: 0, verts: 0, mats: {}, other: {}, onBC: 0, tex: new Set(), texPx: 0, attrs: {}, sides: {}, transparent: 0, po: 0, buildMs: performance.now() - t0 };
+for (const root of roots) { root.updateMatrixWorld(true); root.traverse((o) => {
+  if (o.isLOD) st.lod++;
+  if (!o.isMesh) { if (o.type !== 'Group' && o.type !== 'Object3D' && !o.isLOD) st.other[o.type] = (st.other[o.type] ?? 0) + 1; return; }
+  st.meshes++;
+  const g = o.geometry, n = g.index ? g.index.count : g.attributes.position.count;
+  const k = o.isInstancedMesh ? o.count : 1;
+  if (o.isInstancedMesh) { st.inst++; st.instCount += o.count; }
+  st.tris += (n / 3) * k; st.verts += g.attributes.position.count;
+  for (const a of Object.keys(g.attributes)) st.attrs[a] = (st.attrs[a] ?? 0) + 1;
+  for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+    st.mats[m.type] = (st.mats[m.type] ?? 0) + 1;
+    if (m.onBeforeCompile && m.onBeforeCompile.toString().length > 30) st.onBC++;
+    if (m.transparent) st.transparent++;
+    if (m.polygonOffset) st.po++;
+    st.sides[m.side] = (st.sides[m.side] ?? 0) + 1;
+    for (const v of Object.values(m)) if (v && v.isTexture && !st.tex.has(v)) { st.tex.add(v); const im = v.image; if (im && im.width) st.texPx += im.width * im.height; }
+  }
+}); }
+st.tex = st.tex.size;
+window.__stats = st; window.__done = true;
+</script></body></html>
