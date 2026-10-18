@@ -117,7 +117,9 @@ export class Campus {
       m.diffuse = new pc.Color(0, 0, 0);
       m.emissive = srgb(r.color);
       m.emissiveIntensity = 1;
-      if (map) { m.emissiveMap = map; setTransform('emissive', tr); }
+      // (a black colour times its picture is black: the picture is left off, as PlayCanvas would draw nothing of it)
+      const black = m.emissive.r + m.emissive.g + m.emissive.b === 0;
+      if (map && !black) { m.emissiveMap = map; setTransform('emissive', tr); }
       if (r.vc) { m.emissiveVertexColor = true; m.emissiveVertexColorChannel = 'rgb'; }
     } else {
       m.diffuse = srgb(r.color);

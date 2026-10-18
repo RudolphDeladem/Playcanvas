@@ -3,7 +3,8 @@
 # ORIG=/path/to/legonrush-world (default ../legonrush-world). Logs: $LOG (default /tmp/legonrush-convert.log).
 cd "$(dirname "$0")/../.."
 LOG=${LOG:-/tmp/legonrush-convert.log}
-rm -rf public/campus
+# (a partial run, QUERY=?only=..., keeps the files already converted)
+[ -z "$QUERY" ] && rm -rf public/campus
 npx vite --config tools/export/vite.config.ts > "$LOG.server" 2>&1 &
 SERVER=$!
 sleep 5

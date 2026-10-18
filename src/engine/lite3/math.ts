@@ -21,6 +21,8 @@ export class Vector3 {
   setY(v: number) { this.y = v; return this.ch(); }
   setZ(v: number) { this.z = v; return this.ch(); }
   clone() { return new Vector3(this.x, this.y, this.z); }
+  /** to normalised device coordinates through a camera (the kit's PerspectiveCamera) */
+  project(camera: { projectPoint(v: Vector3): void }) { camera.projectPoint(this); return this; }
   copy(v: { x: number; y: number; z: number }) { this.x = v.x; this.y = v.y; this.z = v.z; return this.ch(); }
   add(v: Vector3) { this.x += v.x; this.y += v.y; this.z += v.z; return this.ch(); }
   addScalar(s: number) { this.x += s; this.y += s; this.z += s; return this.ch(); }

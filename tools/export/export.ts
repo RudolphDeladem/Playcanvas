@@ -9,11 +9,12 @@
 //   public/campus/collision.lrz        the original's bike-height mesh raster (meshcollide.ts), 42 m tiles, 0.35 m cells
 //   public/campus/solids.lrz           round solids (trunks, posts) and open passages
 //   public/campus/earth.lrz            the earth tracks (science.ts onEarth) on a 1 m grid
+//   public/campus/landmark.lrz         the landmark keep-outs (life.ts inLandmark) on a 0.5 m grid
 //
 // Nothing here renders: the converter only reads the original's scene graph. Run: tools/export/convert.sh
 import { buildCampus, lampGlow } from '/orig/src/game/world.ts';
 import { buildLandmarks } from '/orig/src/game/landmarks.ts';
-import { setNightLights } from '/orig/src/game/life.ts';
+import { inLandmark, setNightLights } from '/orig/src/game/life.ts';
 import { SOLIDS, PASSAGES } from '/orig/src/game/solids.ts';
 import { meshBlocked } from '/orig/src/game/meshcollide.ts';
 import { onEarth } from '/orig/src/game/science.ts';
@@ -381,6 +382,7 @@ async function run() {
   };
   for (const r of roots) visit(r, 0);
   log('meshes', recs.length);
+  if (q.get('only') === 'landmark') { await exportLandmark(); (window as Any).__stats = { ms: Math.round(performance.now() - T0) }; (window as Any).__done = true; return; }
 
   // materials (day state), then their night state
   const mats = new Set<Any>();
@@ -543,6 +545,31 @@ async function exportData(recs: Rec[]) {
   eb.set(new Uint8Array(eh.buffer));
   eBits.forEach((b, k) => eb.set(b, eh.byteLength + k * b.length));
   log('earth tiles', eBits.length, 'bytes', await put('earth.lrz', eb, true));
+  await exportLandmark();
+}
+
+/** the landmark models' keep-outs (Campus Life keeps its guests and props off them): 0.5 m cells in 64 m tiles, only
+ *  where a coarse pass (4 m, padded) finds any */
+async function exportLandmark() {
+  const b0 = mapBounds(), LT = 64, LC = 0.5, LN = LT / LC;
+  const out: number[] = [], bits: Uint8Array[] = [];
+  for (let i = Math.floor((b0.minX - 100) / LT); i <= Math.floor((b0.maxX + 100) / LT); i++) {
+    for (let j = Math.floor((b0.minZ - 100) / LT); j <= Math.floor((b0.maxZ + 100) / LT); j++) {
+      let hit = false;
+      for (let a = 2; a < LT && !hit; a += 4) for (let c = 2; c < LT && !hit; c += 4) hit = inLandmark(i * LT + a, j * LT + c, 3);
+      if (!hit) continue;
+      const b = new Uint8Array((LN * LN) / 8);
+      let any = false;
+      for (let cj = 0; cj < LN; cj++) for (let ci = 0; ci < LN; ci++) if (inLandmark(i * LT + (ci + 0.5) * LC, j * LT + (cj + 0.5) * LC, 0)) { const k = cj * LN + ci; b[k >> 3] |= 1 << (k & 7); any = true; }
+      if (any) { out.push(i, j); bits.push(b); }
+    }
+    await yieldNow();
+  }
+  const h = new Int32Array([LT, Math.round(LC * 1000), bits.length, ...out]);
+  const body = new Uint8Array(h.byteLength + bits.length * (LN * LN) / 8);
+  body.set(new Uint8Array(h.buffer));
+  bits.forEach((b, k) => body.set(b, h.byteLength + k * b.length));
+  log('landmark tiles', bits.length, 'bytes', await put('landmark.lrz', body, true));
 }
 
 run().catch((e) => { console.error('[x] FAILED', e?.stack ?? e); (window as Any).__stats = { error: String(e?.stack ?? e) }; (window as Any).__done = true; });

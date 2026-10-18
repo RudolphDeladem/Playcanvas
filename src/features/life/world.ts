@@ -2,8 +2,8 @@
 // props (food stalls, a DJ booth and speakers, benches, bunting...) and a crowd. Everyone moves:
 // people dance in time with the sound system, chat in little groups, sit, eat, take photos,
 // arrive on their bikes and leave. You walk around (tap the ground, or WASD) and meet them.
-import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import * as THREE from '../../engine/lite3';
+import { mergeGeometries } from '../../engine/lite3';
 import { buildingAt, placeByName } from '../../game/campusmap';
 import type { SceneGuest } from '../../game/Game';
 import { inLandmark } from '../../game/life';

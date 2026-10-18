@@ -25,6 +25,9 @@ export interface Engine {
 }
 
 let engine: Engine | null = null;
+const waiting: (() => void)[] = [];
+/** runs fn once the engine exists (now, if it does): materials made at import time are set up then */
+export function whenEngine(fn: () => void) { if (engine) fn(); else waiting.push(fn); }
 
 export function createEngine(canvas: HTMLCanvasElement, opts: { preserveDrawingBuffer?: boolean } = {}): Engine {
   if (engine) return engine;
@@ -96,6 +99,7 @@ export function createEngine(canvas: HTMLCanvasElement, opts: { preserveDrawingB
 
   engine = { app, device: app.graphicsDevice, camera, sun, world, setSky, setLighting, lowEnd };
   app.start();
+  for (const fn of waiting.splice(0)) fn();
   return engine;
 }
 

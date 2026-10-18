@@ -119,6 +119,18 @@ export class BufferGeometry {
     return g;
   }
   /** smooth normals by face area (Three.js's computeVertexNormals) */
+  setFromPoints(points: { x: number; y: number; z?: number }[]) {
+    const a = new Float32Array(points.length * 3);
+    points.forEach((p, i) => { a[i * 3] = p.x; a[i * 3 + 1] = p.y; a[i * 3 + 2] = p.z ?? 0; });
+    return this.setAttribute('position', new BufferAttribute(a, 3));
+  }
+  normalizeNormals() {
+    const n = this.attributes.normal;
+    if (!n) return this;
+    for (let i = 0; i < n.count; i++) { const x = n.getX(i), y = n.getY(i), z = n.getZ(i), l = Math.hypot(x, y, z) || 1; n.setXYZ(i, x / l, y / l, z / l); }
+    this.version++;
+    return this;
+  }
   computeVertexNormals() {
     const p = this.attributes.position, n = new Float32Array(p.count * 3);
     const tri = (a: number, b: number, c: number) => {
@@ -498,4 +510,30 @@ export function mergeGeometries(parts: BufferGeometry[], useGroups = false): Buf
 
 export class Shape {
   constructor(public points: Vector2[] = []) {}
+}
+
+export class InstancedBufferAttribute extends BufferAttribute {}
+
+/** welds vertices whose every attribute matches (to 4 decimals), as Three.js's BufferGeometryUtils.mergeVertices */
+export function mergeVertices(g: BufferGeometry, tolerance = 1e-4): BufferGeometry {
+  const names = Object.keys(g.attributes), count = g.attributes.position.count, k = 1 / tolerance;
+  const map = new Map<string, number>(), out: Record<string, number[]> = {}, idx: number[] = [];
+  for (const n of names) out[n] = [];
+  const src = g.index ? Array.from(g.index.array as ArrayLike<number>) : Array.from({ length: count }, (_, i) => i);
+  let next = 0;
+  for (const i of src) {
+    let key = '';
+    for (const n of names) { const a = g.attributes[n]; for (let c = 0; c < a.itemSize; c++) key += Math.round(a.array[i * a.itemSize + c] * k) + ','; }
+    let j = map.get(key);
+    if (j === undefined) {
+      j = next++;
+      map.set(key, j);
+      for (const n of names) { const a = g.attributes[n]; for (let c = 0; c < a.itemSize; c++) out[n].push(a.array[i * a.itemSize + c]); }
+    }
+    idx.push(j);
+  }
+  const r = new BufferGeometry();
+  for (const n of names) r.setAttribute(n, new BufferAttribute(new Float32Array(out[n]), g.attributes[n].itemSize, g.attributes[n].normalized));
+  r.setIndex(idx);
+  return r;
 }

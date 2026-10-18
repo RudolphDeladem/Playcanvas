@@ -341,7 +341,8 @@ export interface Settings {
   campus: string;
   /** how hard rides are: traffic and obstacles (the game) and mission timers */
   difficulty: Difficulty;
-  /** weather in rides: changing (sun and showers come and go), live (Legon's real weather) or always clear */
+  /** weather in rides: changing (sun and showers come and go), live (Legon's real weather) or always clear (the default:
+   *  rain is off unless the rider turns it on, the recreation brief) */
   weather: 'changing' | 'live' | 'clear';
   /** the welcome screens were shown (only once, to someone new) */
   onboarded: boolean;
@@ -357,7 +358,7 @@ export interface Settings {
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
 const defaultSettings = (): Settings => ({
-  sound: true, volume: 0.8, musicVolume: 0.5, graphics: 'auto', slowDevice: false, leftHanded: false, campus: 'ug', difficulty: 'normal', weather: 'changing',
+  sound: true, volume: 0.8, musicVolume: 0.5, graphics: 'auto', slowDevice: false, leftHanded: false, campus: 'ug', difficulty: 'normal', weather: 'clear',
   onboarded: false, vibration: true, bigButtons: false, nightMenus: false, rideSpeed: 'normal',
   reducedMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
 });

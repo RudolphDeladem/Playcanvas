@@ -1,0 +1,2218 @@
+// The game: the bike and its rider, the camera, the rides (races on a route, Explore's guided rides and free ride),
+// traffic, coins, rivals and bots, photo mode and the Garage camera. Ported from the original Three.js game (its
+// Game.ts) to PlayCanvas: the logic, the numbers and the public API are the original's; the scene is PlayCanvas
+// entities (through the modelling kit, engine/lite3), the campus is streamed from the converted tiles (engine/campus.ts),
+// the sky, lights, fog and tone mapping are the engine's (engine/app.ts, engine/sky.ts), and collision reads the
+// rasters the converter baked from the original (collision.ts).
+import * as pc from 'playcanvas';
+import * as THREE from '../engine/lite3';
+import type { BikeSpec } from '../data/campus';
+import { CAMPUS_LOOP, type Route, type RideStep } from './routes';
+import { sfx } from '../audio';
+import { buildCoin, buildObstacle, buildRider, OBSTACLES, taxi, trotro, type BikeStyle, type ObstacleKind, type ObstacleSpec, type RiderLook, type RiderRig } from './models';
+import type { Track } from './track';
+import { groundFrom, groundHeight, inStairs, layerHeight } from './relief';
+import { deckAt } from './cutplan';
+import { Tufts } from './tufts';
+import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
+import { AREAS, buildingAt, buildingNear, mapBounds, roadAt } from './campusmap';
+import { inPassage, solidAt } from './solids';
+import { roadClearance, setNightLights, nightHooks } from './life';
+import { loadCollision, meshBlocked, onEarth, warmCollision, warmOne } from './collision';
+import { createWeatherFx, type WeatherFx } from './weatherfx';
+import { createEngine, type Engine } from '../engine/app';
+import { Campus } from '../engine/campus';
+import { SKIES } from '../engine/sky';
+
+/** 'pedal' is one tap of the pedal; see Game.pedal() for press/release */
+export type Action = 'left' | 'right' | 'jump' | 'boost' | 'pedal';
+export type Difficulty = 'easy' | 'normal' | 'hard';
+export type Weather = 'clear' | 'rain';
+/** shop upgrade levels, 0..3 each */
+export interface Upgrades { speed: number; grip: number; boost: number }
+/** something that borrows the campus scene (Campus Life hangouts) */
+export interface SceneGuest {
+  root: THREE.Object3D;
+  focus: THREE.Vector3;
+  update(dt: number, cam: THREE.PerspectiveCamera): void;
+}
+
+/** one-ride items from the shop */
+export interface RideItems { energy: boolean; repairKits: number }
+
+export interface HudState {
+  distance: number;
+  routeLength: number;
+  coins: number;
+  boost: number;
+  boosting: boolean;
+  speed: number;
+  countdown: string | null;
+  /** rider position on the map (metres, +x east, -z north) and heading */
+  pos: [number, number];
+  yaw: number;
+  /** explore rides: the next direction and how far away it is */
+  next: { text: string; turn: string; dist: number } | null;
+  /** seconds behind the first rival (negative: ahead), when racing one */
+  ghostGap: number | null;
+  /** your place among the rivals, when racing more than one */
+  place: { pos: number; of: number } | null;
+  /** crash helmets left: each one saves a ride from one crash */
+  helmets: number;
+  /** holding the brake (only with brakes fitted) */
+  braking: boolean;
+  /** speed for display, in km/h (scaled to what a fast cyclist would see) */
+  kmh: number;
+  /** rider's legs: 1 fresh, drains while boosting, refills while cruising; low stamina slows you */
+  stamina: number;
+  /** riding in a rival's slipstream */
+  drafting: boolean;
+  /** pedal rhythm 0..1: steady pedal taps build it for a small speed bonus */
+  rhythm: number;
+  /** repair kits left this ride */
+  repairKits: number;
+  /** stopped to fix the bike with a repair kit */
+  repairing: boolean;
+}
+
+/** A recorded ride: road distance and lateral offset every `step` seconds. */
+export interface GhostRun {
+  step: number;
+  d: number[];
+  x: number[];
+}
+const GHOST_STEP = 0.1;
+export type Vehicle = 'bike' | 'walk' | 'taxi' | 'shuttle';
+/** the rider's camera views (Game.camView): distance and height multipliers on the chase camera; the last is the
+ *  fly-over (FLY_OVER), placed by its own rule */
+const VIEWS: [number, number][] = [[1, 1], [1.7, 1.9], [0.55, 0.5], [1, 1]];
+/** the fly-over view: the camera high above and a little behind the bike, looking down on it as it moves */
+const FLY_OVER = 3, FLY_HEIGHT = 30, FLY_BACK = 11;
+/** extra camera distance and height for each way of travelling */
+const VEHICLE_CAM: Record<Vehicle, [number, number]> = { bike: [0, 0], walk: [-1.6, -0.6], taxi: [2, 0.6], shuttle: [4, 1.6] };
+/** bike paints for the riders beside you */
+const RIVAL_BIKES = ['#1f2937', '#c62828', '#1565c0', '#2e7d32', '#6a1b9a', '#ef6c00'];
+
+/** Another rider on the road: your best run, a friend's challenge or a bot, replayed from a recording. */
+export interface Rival {
+  run: GhostRun;
+  name: string;
+  color: string;
+  /** see-through, for your own best run */
+  ghostly: boolean;
+  /** someone riding right now: their run grows as their position arrives over the network */
+  live?: boolean;
+  /** a bot that rides live in this ride (dodges traffic, makes mistakes, rubber-bands); its run is recorded as it rides */
+  bot?: BotStyle;
+}
+
+/** How a bot rides. */
+export interface BotStyle {
+  /** speed relative to an average rider (about 0.9..1.1) */
+  pace: number;
+  /** favourite lane 0..2 and offset inside it (-0.5..0.5 m): every rider has their own line */
+  lane: number;
+  line: number;
+  /** 0..1: higher reacts sooner to traffic and makes fewer mistakes */
+  skill: number;
+}
+
+interface BotState {
+  d: number; x: number; vx: number; y: number; vy: number; v: number;
+  lane: number;
+  /** seconds left of a mistake (wobble and slow down) or a knock */
+  slowT: number;
+  nextMistake: number;
+  /** seconds until the bot next looks at the road ahead */
+  think: number;
+  wide: number;
+  prevD: number;
+}
+
+/** how far behind real time live riders are drawn, so their position can be smoothed between updates */
+const LIVE_LAG = 0.8;
+
+interface RivalState extends Rival {
+  rig: RiderRig;
+  crank: number;
+  finish: number;
+  lean: number;
+  sim?: BotState;
+}
+
+/** Ramps, speed bumps and puddles: road features that are not obstacles. */
+interface Feature {
+  kind: 'ramp' | 'bump' | 'puddle';
+  mesh: THREE.Object3D;
+  d: number;
+  x: number;
+  /** width across the road, length along it */
+  w: number;
+  len: number;
+  done: boolean;
+}
+
+interface Treasure {
+  mesh: THREE.Object3D;
+  d: number;
+  x: number;
+  lane: number;
+  taken: boolean;
+  t: number;
+}
+
+const DIFF: Record<Difficulty, { gap: number; double: number; moving: number; botPace: number; catchUp: number; ease: number }> = {
+  easy: { gap: 1.35, double: 0.14, moving: 0.3, botPace: 0.93, catchUp: 0.04, ease: 0.16 },
+  normal: { gap: 1, double: 0.25, moving: 0.4, botPace: 1, catchUp: 0.1, ease: 0.08 },
+  hard: { gap: 0.78, double: 0.36, moving: 0.5, botPace: 1.06, catchUp: 0.16, ease: 0.03 },
+};
+
+/** small seeded random generator, for treasure spots everyone on a route shares */
+function seeded(seed: number) {
+  let a = seed >>> 0 || 1;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** the jump ramp: a wedge RAMP.w wide rising RAMP.h over RAMP.len along -z (the original extruded a triangle) */
+function rampGeometry() {
+  const { w, len, h } = RAMP, x0 = -w / 2, x1 = w / 2;
+  // the triangle in (z, y): (0,0), (-len,0), (-len,h); extruded along x
+  const tri = [[0, 0], [-len, 0], [-len, h]];
+  const pos: number[] = [];
+  const quad = (a: number[], b: number[]) => { pos.push(x0, a[1], a[0], x1, a[1], a[0], x1, b[1], b[0], x0, a[1], a[0], x1, b[1], b[0], x0, b[1], b[0]); };
+  quad(tri[1], tri[0]); quad(tri[0], tri[2]); quad(tri[2], tri[1]);
+  for (const x of [x0, x1]) for (const p of x === x0 ? [tri[0], tri[1], tri[2]] : [tri[0], tri[2], tri[1]]) pos.push(x, p[1], p[0]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Shared meshes for road features, built once. */
+let featureKit: { ramp: THREE.BufferGeometry; rampMat: THREE.Material; bump: THREE.BufferGeometry; bumpMat: THREE.Material; puddle: THREE.BufferGeometry; puddleMat: THREE.Material; gem: THREE.BufferGeometry; gemMat: THREE.Material } | null = null;
+const RAMP = { w: 1.9, len: 3.2, h: 0.7 };
+function kit() {
+  if (featureKit) return featureKit;
+  // a wedge rising along the direction of travel (-z)
+  const ramp = rampGeometry();
+  const bump = new THREE.CapsuleGeometry(0.34, ROAD_HALF * 2 - 0.8, 2, 8).rotateZ(Math.PI / 2).scale(1, 0.4, 1);
+  const puddle = new THREE.CircleGeometry(1, 18).rotateX(-Math.PI / 2);
+  const gem = new THREE.OctahedronGeometry(0.32, 0).scale(1, 1.35, 1);
+  featureKit = {
+    ramp,
+    rampMat: new THREE.MeshStandardMaterial({ color: '#c08a4e', roughness: 0.85 }),
+    bump,
+    bumpMat: new THREE.MeshStandardMaterial({ color: '#f2c81e', roughness: 0.6, emissive: '#3a2a00', polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -14 }),
+    puddle,
+    puddleMat: new THREE.MeshStandardMaterial({ color: '#8fa6b8', roughness: 0.05, metalness: 0.85, transparent: true, opacity: 0.62, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -16 }),
+    gem,
+    gemMat: new THREE.MeshStandardMaterial({ color: '#ffcf3a', metalness: 1, roughness: 0.22, emissive: '#8a5a00', emissiveIntensity: 0.6 }),
+  };
+  return featureKit;
+}
+
+export interface RideEnd {
+  distance: number;
+  coins: number;
+  time: number;
+  finished: boolean;
+}
+
+interface Obstacle {
+  spec: ObstacleSpec;
+  mesh: THREE.Object3D;
+  lane: number;
+  /** lateral offset from the road centre */
+  x: number;
+  d: number;
+  vd: number;
+  /** cruising speed it returns to after braking */
+  cruise: number;
+  hit: boolean;
+  /** rider has gone past it (near-miss checked) */
+  passed: boolean;
+  /** seconds until this car may honk again */
+  honk: number;
+  /** lateral shift while giving way to the rider */
+  shift: number;
+  fling?: THREE.Vector3;
+}
+
+/** the grade under a bike at x, z heading along yaw (its nose up the slope): the ground under its two wheels (on a
+ *  bridge over the Legon Road cutting: the level it is on, from its height y when given, else from its heading) */
+function slopePitch(x: number, z: number, yaw: number, y?: number) {
+  const hx = -Math.sin(yaw) * 0.55, hz = -Math.cos(yaw) * 0.55;
+  const g = (px: number, pz: number) => (y === undefined ? layerHeight(px, pz, hx, hz) : groundFrom(px, pz, y));
+  return Math.atan2(g(x + hx, z + hz) - g(x - hx, z - hz), 1.1);
+}
+
+/** A student walking along the pavement: scenery, not an obstacle. */
+interface Walker {
+  mesh: THREE.Object3D;
+  d: number;
+  x: number;
+  v: number;
+  t: number;
+}
+
+interface Coin {
+  mesh: THREE.Mesh;
+  x: number;
+  y: number;
+  d: number;
+  taken: boolean;
+  t: number;
+}
+
+type Phase = 'showcase' | 'cinematic' | 'countdown' | 'riding' | 'crashed' | 'finished';
+
+export type TimeOfDay = 'day' | 'sunset' | 'night';
+
+/** Explore's free ride: water a bike can't go into (with its bounding boxes) */
+let wilds: { pts: Float32Array; x0: number; x1: number; z0: number; z1: number }[] | null = null;
+const inPts = (pts: Float32Array, x: number, z: number) => {
+  let c = false;
+  for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    const zi = pts[i + 1], zj = pts[j + 1];
+    if ((zi > z) !== (zj > z) && x < ((pts[j] - pts[i]) * (z - zi)) / (zj - zi) + pts[i]) c = !c;
+  }
+  return c;
+};
+/**
+ * Where a free-ridden bike can't go: stairs; and off the roads, buildings (their real outlines, not
+ * their bounding boxes), trees and water. The grass of a wood is rideable between its trees (owner: the
+ * wooded lawns round the GCB Lecture Building); each trunk stops the bike, which slides off it. Every
+ * mapped road and path is rideable end to end: a tree at its edge, a water area mapped across it, or a
+ * building outline it runs through (an archway, a gate canopy, a passage) doesn't close it, nor does a building's
+ * outline across an open passage through its ground floor (solids.ts: PASSAGES).
+ */
+function freeBlocked(x: number, z: number) {
+  if (inStairs(x, z)) return true;
+  // trunks, posts and what the models draw at bike height (walls, fences, parked cars, planters) stop it everywhere,
+  // on the roads too; the map's building outlines only off the roads (some reach a little over a road's edge)
+  if (solidAt(x, z, 0.3) || meshBlocked(x, z)) return true;
+  if (roadClearance(x, z, 6, -1, true) <= 0) return false;
+  if (buildingNear(x, z, 0.35) && !inPassage(x, z)) return true;
+  if (!wilds) {
+    wilds = AREAS.filter((a) => a.kind === 'water').map((a) => {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let i = 0; i < a.pts.length; i += 2) { x0 = Math.min(x0, a.pts[i]); x1 = Math.max(x1, a.pts[i]); z0 = Math.min(z0, a.pts[i + 1]); z1 = Math.max(z1, a.pts[i + 1]); }
+      return { pts: a.pts, x0, x1, z0, z1 };
+    });
+  }
+  return wilds.some((w) => x > w.x0 && x < w.x1 && z > w.z0 && z < w.z1 && inPts(w.pts, x, z));
+}
+let bounds: ReturnType<typeof mapBounds> | null = null;
+
+const GRAVITY = 22;
+const JUMP_V = 7;
+const RIDER_LEN = 1.6;
+const RIDER_W = 0.6;
+/** the campus build's steps (buildCampusAsync), as counted in the preview: the loading bar's scale */
+const BUILD_STEPS = 560;
+const REPAIR_TIME = 1.8;
+const NEAR_MISS_COINS = 2;
+
+export class Game {
+  /** the PlayCanvas application, its camera, sun and sky */
+  readonly engine: Engine;
+  readonly scene: THREE.Scene;
+  // (the near plane at 0.3 m, not 0.1: three times the depth precision, so paint and signs set a few centimetres off a
+  // wall no longer flicker against it in the distance)
+  readonly camera: THREE.PerspectiveCamera;
+  /** the converted campus, streamed round the camera */
+  readonly campus: Campus;
+  /** grass tufts and wild flowers round the camera */
+  private tufts: Tufts;
+  private cine = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
+  private rider: RiderRig;
+  private route: Route = CAMPUS_LOOP;
+  private track: Track = CAMPUS_LOOP.track;
+  private routeLayer: THREE.Group | null = null;
+  /** a lamp on the handlebars for night rides */
+  private headlight: pc.Entity;
+  private rivals: RivalState[] = [];
+  private rigPool: { rig: RiderRig; mat: THREE.MeshStandardMaterial }[] = [];
+  private solidPool: { rig: RiderRig; key: string }[] = [];
+  private rec: GhostRun = { step: GHOST_STEP, d: [], x: [] };
+
+  private phase: Phase = 'showcase';
+  paused = false;
+  /** skip drawing the menu scene while a full-screen tab (the map) covers it */
+  sleep = false;
+  /** tutorial: obstacles wait until the rider has tried every move */
+  private holdSpawns = false;
+
+  // rider state
+  private d = 0;
+  private x = 0;
+  private y = 0;
+  private vy = 0;
+  private lane = 1;
+  private speed = 0;
+  private slowTimer = 0;
+  private boost = 0;
+  private boostTime = 0;
+  private coins = 0;
+  private time = 0;
+  private endTimer = 0;
+  private countdownT = 0;
+  /** set by start(): the first frame puts the camera straight behind the rider */
+  private snapCam = false;
+  private lastCount = '';
+  private bike: BikeSpec | null = null;
+  private crank = 0;
+  private lean = 0;
+  /** the bike's pitch with the grade under it (eased) */
+  private slope = 0;
+  private shake = 0;
+  /** gear from the shop: crash helmets left and brake level (0 none, 1 rim, 2 disc) */
+  private helmets = 0;
+  private brakeLevel = 0;
+  private braking = false;
+  /** seconds of no-crash time after a helmet saves you */
+  private shield = 0;
+
+  // ride settings (kept across rides until changed)
+  private upgrades: Upgrades = { speed: 0, grip: 0, boost: 0 };
+  private difficultyLevel: Difficulty = 'normal';
+  private items: RideItems = { energy: false, repairKits: 0 };
+  private weather: Weather = 'clear';
+  private treasureCfg = { count: 0, seed: 1 };
+
+  // ride state for the newer moves
+  private vx = 0;
+  private stamina = 1;
+  private drafting = false;
+  private draftHold = 0;
+  private rhythm = 0;
+  private pedalDown = false;
+  private lastTap = -10;
+  private tapGap = 0;
+  private repairKits = 0;
+  private repairT = 0;
+  private puddleT = 0;
+  private onRamp = false;
+  private prevD = 0;
+  private honkCool = 0;
+  private features: Feature[] = [];
+  private treasures: Treasure[] = [];
+  private treasureFound = 0;
+  private photo = false;
+  private photoYaw = 0;
+  private photoPitch = 0.35;
+
+  private obstacles: Obstacle[] = [];
+  private coinList: Coin[] = [];
+  private nextSpawn = 0;
+  private dynamic: THREE.Group;
+  private walkers: Walker[] = [];
+  private orbit = 0;
+
+  onHud: (h: HudState) => void = () => {};
+  /** no camera shake, steady field of view, slow menu camera */
+  reducedMotion = false;
+  /** auto graphics: called once when a ride runs too slowly on high */
+  onSlow: () => void = () => {};
+  watchSpeed = false;
+  private quality: 'high' | 'low' = 'high';
+  private fpsFrames = 0;
+  private fpsTime = 0;
+  private lowEnd: boolean;
+  /** no traffic or obstacles: for learning the way */
+  calm = false;
+  /** coins on the road (Explore has none: the trip itself is the point) */
+  pickups = true;
+  /** how you travel: on the bike, on foot, in a taxi or on the campus shuttle */
+  vehicle: Vehicle = 'bike';
+  private vehicleObj: THREE.Object3D | null = null;
+  setVehicle(v: Vehicle) {
+    this.vehicle = v;
+    if (this.vehicleObj) { this.rider.root.remove(this.vehicleObj); this.vehicleObj = null; }
+    this.rider.body.visible = v === 'bike';
+    if (v === 'bike') return;
+    const o = v === 'taxi' ? taxi() : v === 'shuttle' ? trotro() : buildObstacle('pedestrian');
+    this.vehicleObj = o;
+    this.rider.root.add(o);
+  }
+  /** the rider's chosen cruising speed (m/s) for Explore and Vibe rides; null: the normal pace */
+  cruiseSpeed: number | null = null;
+  /** Explore and Vibe rides and riding it yourself: 1 at normal speed, 1.3 at the faster setting */
+  speedFactor = 1;
+  /**
+   * Explore's guided ride: a slow, steady pace that rolls to a stop at each place in `stops`
+   * (ride distance d, map x/z) and waits there until continueTour().
+   */
+  tour: { stops: { d: number; x: number; z: number }[]; speed: number } | null = null;
+  /** the guided ride stopped at tour stop i (null: rolling again) */
+  onGuide: (i: number | null) => void = () => {};
+  private guideIdx = 0;
+  private guideWait = false;
+  /** 0..1: how far the camera has turned to look at the place the ride stopped at */
+  private guideLook = 0;
+  onEnd: (r: RideEnd) => void = () => {};
+  /** a helmet just saved the rider from a crash; how many are left */
+  onHelmet: (left: number) => void = () => {};
+  onAction: (a: Action) => void = () => {};
+  /** passed close to a car, rider or barrier without touching it (2 bonus coins are already counted) */
+  onNearMiss: () => void = () => {};
+  /** started (true) or stopped (false) riding in a rival's slipstream */
+  onDraft: (on: boolean) => void = () => {};
+  /** a ramp or speed bump threw the rider into the air */
+  onJump: () => void = () => {};
+  /** a repair kit fixed the bike after a crash; how many are left */
+  onRepair: (left: number) => void = () => {};
+  /** picked up a treasure; how many found so far this ride */
+  onTreasure: (found: number) => void = () => {};
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.engine = createEngine(canvas);
+    // (entities are made once the PlayCanvas application exists)
+    this.scene = new THREE.Scene();
+    this.dynamic = new THREE.Group();
+    this.headlight = new pc.Entity('headlight');
+    const lowEnd = this.engine.lowEnd;
+    this.lowEnd = lowEnd;
+    canvas.addEventListener('webglcontextrestored', () => { console.info('LEGONRUSH: WebGL context restored'); location.reload(); });
+    this.engine.world.addChild(this.scene.entity);
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
+    this.campus = new Campus(this.engine);
+    // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
+    nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
+
+    this.tufts = new Tufts(lowEnd);
+    this.scene.add(this.tufts.group);
+    this.setRoute(CAMPUS_LOOP);
+    this.scene.add(this.dynamic);
+
+    this.rider = buildRider('#d64545', '#f2c230');
+    this.scene.add(this.rider.root);
+    // a lamp on the handlebars for night rides: a spot light shining ahead and down (from (0, 1.1, -0.5) toward
+    // (0, 0, -14) in the bike's frame; PlayCanvas spot lights shine down their local -Y)
+    this.headlight.addComponent('light', { type: 'spot', color: new pc.Color(1, 0.945, 0.81), intensity: 0, range: 45, innerConeAngle: 18, outerConeAngle: 31, castShadows: false, falloffMode: pc.LIGHTFALLOFF_INVERSESQUARED });
+    this.headlight.setLocalPosition(0, 1.1, -0.5);
+    this.headlight.setLocalEulerAngles(90 - (Math.atan2(1.1, 13.5) * 180) / Math.PI, 0, 0);
+    this.rider.root.entity.addChild(this.headlight);
+    this.setTimeOfDay('day');
+
+    this.resize();
+    addEventListener('resize', () => this.resize());
+    // the game draws only when it has something to show (the original's animation loop returned early while sleeping)
+    this.engine.app.autoRender = false;
+    this.engine.app.on('update', (dt: number) => this.frame(dt));
+    this.ready = this.buildWorld();
+  }
+  private lampLevel = 0;
+
+  /** the campus is built after the menus show, a step at a time (the owner: "Page Unresponsive" on laptops, phones never
+   *  opening the game); a ride waits for this */
+  readonly ready: Promise<void>;
+  isReady = false;
+  /** how far the build has come (0..1), for the loading bar */
+  onProgress?: (p: number) => void;
+  private progress(p: number) { this.onProgress?.(Math.min(1, p)); }
+  private async buildWorld() {
+    const T = (s: string, t0: number) => { if (import.meta.env.DEV) console.log(`[T] ${s} ${Math.round(performance.now() - t0)} ms`); };
+    await new Promise((r) => setTimeout(r, 30));
+    const t0 = performance.now();
+    // the tiles round the start (the menu scene) and the collision data; the rest streams in round the camera
+    const p = this.pose(this.d);
+    this.campus.onProgress = (f) => this.progress(0.95 * f);
+    await Promise.all([this.campus.preload(p.x, p.z, this.lowEnd ? 200 : 260), loadCollision()]);
+    T('campus', t0);
+    this.progress(1);
+    this.isReady = true;
+    performance.mark('legonrush:world-ready');
+  }
+
+  private warmUp() { /* PlayCanvas compiles each material's shader when first drawn */ }
+
+  /** low: no shadows and a lower resolution, for cheap phones */
+  setQuality(q: 'high' | 'low') {
+    if (q === this.quality) return;
+    this.quality = q;
+    this.engine.sun.light!.castShadows = q === 'high';
+    this.tufts.setLow(q === 'low');
+    this.engine.device.maxPixelRatio = q === 'low' ? Math.min(devicePixelRatio, 1) : Math.min(devicePixelRatio, 1.5);
+    this.engine.app.resizeCanvas();
+    this.resize();
+    this.warmUp();
+  }
+
+  get currentQuality() {
+    return this.quality;
+  }
+
+  get currentRoute() {
+    return this.route;
+  }
+
+  /** Swaps the ridden route; the campus itself stays. */
+  setRoute(route: Route) {
+    if (this.routeLayer) {
+      this.scene.remove(this.routeLayer);
+      disposeLayer(this.routeLayer);
+    }
+    this.route = route;
+    this.track = route.track;
+    // grass tufts keep off the route's road and pavements (they follow the mapped roads, which a route's wider road
+    // and rounded bends overrun: owner, tufts on the road from Pent to the engineering school)
+    this.tufts.setRoute((x, z) => route.track.distanceToRoad(x, z) < ROAD_HALF + 2.0);
+    this.routeLayer = buildRouteLayer(route.track, {
+      start: route.lead,
+      finish: route.lead + route.length,
+      startText: route.kind === 'explore' ? route.from.name : 'Start',
+      finishText: route.kind === 'explore' ? route.to.name : 'Finish',
+      finishKind: route.kind === 'explore' ? 'destination' : 'race',
+      labels: route.labels,
+      destination: route.to,
+      groundLine: route.kind !== 'explore',
+    });
+    this.scene.add(this.routeLayer);
+    if (this.rider) this.reset(); // the constructor resets once the rider exists
+  }
+
+  /** Next direction ahead of the rider, for the explore HUD. */
+  private nextStep(): { step: RideStep; dist: number } | null {
+    for (const step of this.route.steps) {
+      if (step.turn === 'start') continue;
+      if (step.d > this.d - 3) return { step, dist: Math.max(0, step.d - this.d) };
+    }
+    return null;
+  }
+
+  setLook(look: RiderLook, bikeColor: string) {
+    this.rider.setLook(look);
+    this.rider.setBikeColor(bikeColor);
+  }
+
+  /** the Garage's customisation of your bike (colours, finish, wheels, decal, lights...) */
+  setBikeStyle(style: BikeStyle) {
+    this.rider.setBikeStyle(style);
+  }
+
+  /**
+   * Garage camera (menus only): orbits the bike where the page wants it. rect is the screen box
+   * (CSS pixels) the bike should sit in; yaw turns round the bike (0 behind, PI/2 side, PI front),
+   * zoom 1 fills the box. null goes back to the normal menu camera. showcase() clears it.
+   */
+  viewBike(v: BikeView | null) {
+    this.bikeView = v ? { ...v } : null;
+    this.rider.showRider(!v || v.rider !== false);
+    if (!v) {
+      this.camera.clearViewOffset();
+      this.camera.fov = innerWidth < innerHeight ? 72 : 60;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+  /** where the Garage camera has turned to (it keeps turning while spin is on) */
+  get bikeYaw() {
+    return this.bikeView?.yaw ?? Math.PI * 0.62;
+  }
+  private bikeView: BikeView | null = null;
+
+  setTimeOfDay(t: TimeOfDay) {
+    const k = SKIES[t];
+    this.lampLevel = k.lamps;
+    setNightLights(t === 'night');
+    this.campus.setNight(t === 'night', k.lamps);
+    // the sky, the sun, the ambient light, the fog and the exposure (engine/app.ts setLighting)
+    if (t !== this.timeOfDay) { this.engine.setSky(k); this.timeOfDay = t; }
+    lampGlow.head.emissiveIntensity = k.lamps * 2.5;
+    lampGlow.pool.opacity = k.lamps * 0.45;
+    lampGlow.pool.visible = k.lamps > 0;
+    // (the original's spot light, 90 candela with decay, in PlayCanvas's units)
+    this.headlight.light!.intensity = k.lamps * 6;
+    this.headlight.enabled = k.lamps > 0;
+  }
+  private timeOfDay: TimeOfDay | null = null;
+
+  /** Your best run on this route, to race against; null for none. */
+  setGhost(g: GhostRun | null) {
+    this.setRivals(g ? [{ run: g, name: 'Best run', color: '#9fd8ff', ghostly: true }] : []);
+  }
+
+  /** Riders replayed beside you; the first one is the gap shown in the HUD. */
+  setRivals(list: Rival[]) {
+    for (const p of this.rigPool) p.rig.root.visible = false;
+    for (const p of this.solidPool) p.rig.root.visible = false;
+    this.rivals = list.filter((r) => r.live || r.run.d.length > 1).map((r, i) => {
+      if (!r.ghostly) {
+        // real riders and bots ride as proper people on proper bikes, not see-through ghosts
+        let s = this.solidPool[i];
+        if (!s || s.key !== r.color) {
+          if (s) this.scene.remove(s.rig.root);
+          const rig = buildRider(r.color, RIVAL_BIKES[i % RIVAL_BIKES.length]);
+          rig.root.visible = false;
+          this.scene.add(rig.root);
+          s = this.solidPool[i] = { rig, key: r.color };
+        }
+        return { ...r, rig: s.rig, crank: 0, lean: 0, finish: r.bot ? Infinity : this.finishTime(r.run) };
+      }
+      let p = this.rigPool[i];
+      if (!p) {
+        const rig = buildRider('#ffffff', '#ffffff');
+        const mat = new THREE.MeshStandardMaterial({ transparent: true, depthWrite: false });
+        rig.root.traverse((o) => {
+          if (o instanceof THREE.Mesh) { o.material = mat; o.castShadow = false; }
+        });
+        rig.root.visible = false;
+        this.scene.add(rig.root);
+        p = this.rigPool[i] = { rig, mat };
+      }
+      p.mat.color.set(r.color);
+      p.mat.emissive.set(r.color);
+      p.mat.emissiveIntensity = r.ghostly ? 0.4 : 0.15;
+      p.mat.opacity = r.ghostly ? 0.38 : 0.7;
+      return { ...r, rig: p.rig, crank: 0, lean: 0, finish: r.bot ? Infinity : this.finishTime(r.run) };
+    });
+  }
+
+  /** When a recorded run crossed the finish line, in seconds; Infinity if it never did. */
+  private finishTime(g: GhostRun) {
+    for (let i = 1; i < g.d.length; i++) {
+      if (g.d[i] >= this.route.length) {
+        const k = (this.route.length - g.d[i - 1]) / Math.max(1e-6, g.d[i] - g.d[i - 1]);
+        return (i - 1 + Math.min(1, Math.max(0, k))) * g.step;
+      }
+    }
+    return Infinity;
+  }
+
+  /** a rival's ride time: live riders are drawn slightly in the past */
+  private rivalT(r: Rival) {
+    return r.live ? Math.max(0, this.time - LIVE_LAG) : this.time;
+  }
+
+  /** Your ride so far, growing as you ride, to stream to the people riding with you. */
+  get recording(): GhostRun {
+    return this.rec;
+  }
+
+  /** Finish times of the rivals in this ride, in order. */
+  get rivalTimes() {
+    return this.rivals.map((r) => {
+      // a bot still riding when you stop: its time at the pace it has now
+      if (r.sim && r.finish === Infinity) return { name: r.name, time: this.time + Math.max(0, this.route.length - r.sim.d) / Math.max(4, r.sim.v) };
+      return { name: r.name, time: r.finish };
+    });
+  }
+
+  /** The ride just finished, sampled for a ghost. */
+  get lastRun(): GhostRun {
+    return { step: this.rec.step, d: this.rec.d.slice(), x: this.rec.x.slice() };
+  }
+
+  /** A recorded run's distance and offset at ride time t. */
+  private runAt(g: GhostRun, t: number): [number, number] {
+    if (!g.d.length) return [0, 0];
+    const f = t / g.step;
+    const i = Math.min(Math.floor(f), g.d.length - 1);
+    const j = Math.min(i + 1, g.d.length - 1);
+    const k = Math.min(1, f - i);
+    return [g.d[i] + (g.d[j] - g.d[i]) * k, g.x[i] + (g.x[j] - g.x[i]) * k];
+  }
+
+  /** Fixed camera for trailers and marketing shots; offsets are relative to the rider. */
+  cinematic(d: number, lane: number, cam: [number, number, number], look: [number, number, number]) {
+    this.reset();
+    this.phase = 'cinematic';
+    this.d = d;
+    this.lane = lane;
+    this.x = LANES[lane];
+    const p = this.pose(d, this.x);
+    // offsets are in the rider's frame: x right, y up, z behind
+    const local = (o: [number, number, number]) => new THREE.Vector3(p.x + p.nx * o[0] - p.tx * o[2], o[1], p.z + p.nz * o[0] - p.tz * o[2]);
+    this.cine.pos.copy(local(cam));
+    this.cine.look.copy(local(look));
+  }
+
+  /** Places traffic and coins ahead of the rider for staged shots. */
+  stage(items: { kind: ObstacleKind | 'coin'; lane: number; ahead: number }[]) {
+    for (const it of items) {
+      if (it.kind === 'coin') this.addCoin(LANES[it.lane], 0.9, this.d + it.ahead);
+      else this.addObstacle(it.kind, it.lane, this.d + it.ahead);
+    }
+  }
+
+  /**
+   * Campus Life: a hangout borrows the campus (buildings, sky, lights) and drives the camera and
+   * its own crowd until hangout(null). `focus` is where the shadows and the fog culling centre.
+   */
+  hangout(g: SceneGuest | null) {
+    if (g) {
+      this.reset();
+      this.phase = 'showcase';
+      this.sleep = false;
+      if (this.bikeView) this.viewBike(null);
+      this.scene.add(g.root);
+    } else if (this.guest) this.scene.remove(this.guest.root);
+    this.guest = g;
+    this.rider.root.visible = !g;
+    if (this.routeLayer) this.routeLayer.visible = !g;
+  }
+  private guest: SceneGuest | null = null;
+  get world() { return this.scene; }
+
+  /** Idle camera orbiting the rider, used behind menus. */
+  showcase() {
+    if (this.guest) this.hangout(null);
+    this.sleep = false;
+    this.reset();
+    this.phase = 'showcase';
+    this.dressing = false;
+    if (this.bikeView) this.viewBike(null);
+    this.setTimeOfDay('day');
+  }
+
+  /** a close orbit with the rider in the top half of the screen, for dressing the rider */
+  dressView() {
+    if (this.phase !== 'showcase') this.showcase();
+    // start from the front, so the face, glasses and outfit show first
+    if (!this.dressing) this.orbit = Math.PI * 0.8;
+    this.dressing = true;
+  }
+  private dressing = false;
+
+  start(bike: BikeSpec, tutorial: boolean) {
+    this.reset();
+    if (this.bikeView) this.viewBike(null);
+    this.bike = bike;
+    this.holdSpawns = tutorial;
+    this.nextSpawn = tutorial ? 200 : 90;
+    this.phase = 'countdown';
+    this.countdownT = tutorial ? 0.01 : 2.4;
+    this.snapCam = true;
+    this.lastCount = '';
+    this.setTimeOfDay(this.route.time ?? 'day');
+    this.repairKits = this.items.repairKits;
+    for (const r of this.rivals) {
+      r.rig.root.visible = true;
+      if (r.bot) {
+        // bots ride live: their run is written as they go
+        const x = LANES[r.bot.lane] + r.bot.line;
+        r.run = { step: GHOST_STEP, d: [0], x: [x] };
+        r.finish = Infinity;
+        r.sim = { d: 0, x, vx: 0, y: 0, vy: 0, v: 0, lane: r.bot.lane, slowT: 0, nextMistake: 12 + Math.random() * 25 * (0.5 + r.bot.skill), think: 0, wide: 0, prevD: 0 };
+      }
+    }
+    this.placeTreasure();
+    this.updateGhost(0);
+  }
+
+  /** shop upgrade levels (0..3 each): speed +4% top speed, grip steadier steering, boost +20% boost time, per level */
+  setUpgrades(u: Upgrades) {
+    const lv = (n: number) => Math.max(0, Math.min(3, Math.round(n) || 0));
+    this.upgrades = { speed: lv(u.speed), grip: lv(u.grip), boost: lv(u.boost) };
+  }
+
+  /** traffic density, obstacle frequency and how hard the bots ride */
+  setDifficulty(d: Difficulty) {
+    this.difficultyLevel = DIFF[d] ? d : 'normal';
+  }
+
+  /** items for the next ride: an energy drink (boosts last 50% longer) and repair kits */
+  setRideItems(i: RideItems) {
+    this.items = { energy: !!i.energy, repairKits: Math.max(0, Math.floor(i.repairKits) || 0) };
+    if (this.phase !== 'riding') this.repairKits = this.items.repairKits;
+  }
+
+  /** rain: slippery steering and puddles that slow you */
+  setWeather(w: Weather) {
+    this.weather = w === 'rain' ? 'rain' : 'clear';
+    this.weatherFx().set(this.weather === 'rain');
+  }
+
+  private wfx: WeatherFx | null = null;
+  private weatherFx() {
+    return (this.wfx ??= createWeatherFx(this.scene, this.engine));
+  }
+
+  /** where the rider is on the campus map, for sound */
+  get riderXZ(): [number, number] {
+    const p = this.rider.root.position;
+    return [p.x, p.z];
+  }
+
+  /** gold treasure placed at spots along the route picked from the seed (the same seed gives the same spots) */
+  setTreasure(count: number, seed: number) {
+    this.treasureCfg = { count: Math.max(0, Math.min(20, Math.floor(count) || 0)), seed: Math.floor(seed) || 1 };
+    if (this.phase === 'riding' || this.phase === 'countdown') this.placeTreasure();
+  }
+
+  private placeTreasure() {
+    for (const t of this.treasures) this.dynamic.remove(t.mesh);
+    this.treasures = [];
+    this.treasureFound = 0;
+    const { count, seed } = this.treasureCfg;
+    if (!count) return;
+    const rnd = seeded(seed);
+    const k = kit();
+    const span = this.route.length * 0.8;
+    for (let i = 0; i < count; i++) {
+      // one spot in each stretch of the route, somewhere inside it
+      const d = this.route.length * 0.1 + span * ((i + 0.15 + rnd() * 0.7) / count);
+      const lane = (rnd() * 3) | 0;
+      const mesh = new THREE.Mesh(k.gem, k.gemMat);
+      this.place(mesh, d, LANES[lane], 1.0);
+      this.dynamic.add(mesh);
+      this.treasures.push({ mesh, d, x: LANES[lane], lane, taken: false, t: 0 });
+    }
+  }
+
+  /** Events (treasure hunts): one treasure at each given ride distance, in the given lane (0..2). Call while riding. */
+  addTreasureAt(spots: { d: number; lane: number }[]) {
+    const k = kit();
+    for (const s of spots) {
+      const lane = Math.max(0, Math.min(2, Math.round(s.lane)));
+      const mesh = new THREE.Mesh(k.gem, k.gemMat);
+      this.place(mesh, s.d, LANES[lane], 1.0);
+      this.dynamic.add(mesh);
+      this.treasures.push({ mesh, d: s.d, x: LANES[lane], lane, taken: false, t: 0 });
+    }
+  }
+
+  /** Photo mode: freezes the ride and lets the camera orbit the rider. */
+  setPhotoMode(on: boolean) {
+    if (on === this.photo) return;
+    this.photo = on;
+    if (on) {
+      // start from a three-quarter front view
+      this.photoYaw = this.rider.root.rotation.y + Math.PI * 0.75;
+      this.photoPitch = 0.3;
+    }
+  }
+
+  get photoMode() {
+    return this.photo;
+  }
+
+  /** Turns the photo camera: dx, dy in screen pixels of a drag. */
+  orbitPhoto(dx: number, dy: number) {
+    if (!this.photo) return;
+    this.photoYaw -= dx * 0.008;
+    this.photoPitch = Math.max(0.02, Math.min(1.25, this.photoPitch + dy * 0.006));
+  }
+
+  /** The current view as a PNG data URL. */
+  capture(): string {
+    // drawn now and read in the same task, before the browser presents (and clears) the drawing buffer
+    if (!this.guest) this.render(0);
+    THREE.Sprite.face(this.engine.camera);
+    this.engine.app.render();
+    return (this.engine.device as pc.WebglGraphicsDevice).canvas.toDataURL('image/png');
+  }
+
+  /** Press (true) and release (false) the pedal. Steady taps, about 2 to 3 a second, build rhythm for a small speed bonus. */
+  pedal(down: boolean) {
+    if (down === this.pedalDown) return;
+    this.pedalDown = down;
+    if (!down || this.phase !== 'riding' || this.paused || this.photo) return;
+    const gap = this.time - this.lastTap;
+    this.lastTap = this.time;
+    if (gap >= 0.22 && gap <= 0.85) {
+      // steady beats build rhythm, ragged ones lose some
+      const steady = this.tapGap > 0 && gap / this.tapGap > 0.7 && gap / this.tapGap < 1.4;
+      this.rhythm = steady ? Math.min(1, this.rhythm + 0.2) : Math.max(0, this.rhythm * 0.6 + 0.05);
+    } else if (gap < 0.22) this.rhythm *= 0.8; // mashing doesn't help
+    this.tapGap = gap;
+  }
+
+  /** Called by the tutorial once every move has been tried. */
+  releaseSpawns() {
+    this.holdSpawns = false;
+    this.nextSpawn = Math.max(this.nextSpawn, this.d + 70);
+  }
+
+  /** fits the shop gear for the next ride */
+  setGear(helmets: number, brakeLevel: number) {
+    this.helmets = helmets;
+    this.brakeLevel = brakeLevel;
+  }
+
+  /** hold to brake; does nothing without brakes */
+  setBrake(on: boolean) {
+    const was = this.braking;
+    this.braking = on && this.brakeLevel > 0 && this.phase === 'riding';
+    if (this.braking && !was) sfx.lane();
+  }
+
+  giveBoost(amount: number) {
+    this.boost = Math.min(1, this.boost + amount);
+  }
+
+  get isRiding() {
+    return this.phase === 'riding';
+  }
+
+  action(a: Action) {
+    if (this.phase !== 'riding' || this.paused || this.free) return;
+    if (a === 'left' && this.lane > 0) { this.lane--; sfx.lane(); }
+    else if (a === 'right' && this.lane < 2) { this.lane++; sfx.lane(); }
+    else if (a === 'jump') {
+      if (this.y > 0.01) return;
+      this.vy = JUMP_V;
+      sfx.jump();
+    } else if (a === 'boost') {
+      if (this.boost < 0.25 || this.boostTime > 0) return;
+      this.boostTime = (1.5 + this.boost * 3) * (1 + 0.2 * this.upgrades.boost) * (this.items.energy ? 1.5 : 1);
+      this.boost = 0;
+      sfx.boost();
+    } else if (a === 'pedal') {
+      this.pedal(true);
+      this.pedal(false);
+    } else return;
+    this.onAction(a);
+  }
+
+  /**
+   * Explore: a drone's view of the place the ride arrived at. The camera climbs from behind the rider
+   * and circles high over the place, looking down at it, until droneView(null) brings it back down.
+   */
+  droneView(at: { x: number; z: number } | null) {
+    if (!at) { this.drone = null; return; }
+    const r = this.rider.root.position;
+    this.drone = { x: at.x, z: at.z, a: Math.atan2(r.x - at.x, r.z - at.z) };
+  }
+  get droning() { return !!this.drone; }
+
+  // ---------- the rider's camera controls (a controller's right stick, look behind, views, recenter) ----------
+  /** look input this frame, -1..1: x turns the view right, y tilts it down (a controller's right stick) */
+  look = { x: 0, y: 0 };
+  /** held: the camera looks back past the rider (the bike keeps its heading) */
+  lookBehind = false;
+  /** the camera view: 0 the normal chase, 1 far and high, 2 close and low, 3 the fly-over from above */
+  camView = 0;
+  private lookYaw = 0;
+  private lookPitch = 0;
+  /** the next camera view */
+  cycleCamera() { this.camView = (this.camView + 1) % VIEWS.length; return this.camView; }
+  /** the camera straight behind the rider again (and, with `view`, the normal chase view) */
+  recenterCamera(view = false) { if (view) this.camView = 0; this.lookYaw = 0; this.lookPitch = 0; this.look.x = this.look.y = 0; this.lookBehind = false; }
+  /** keeps the camera out of buildings: from the rider's head toward where the camera wants to be, the first point
+   *  inside a building's outline (below its roof) brings the camera in to just short of it, and a little higher */
+  private clearCamera(target: THREE.Vector3) {
+    const r = this.rider.root.position, hx = r.x, hy = r.y + 1.5, hz = r.z;
+    const dx = target.x - hx, dy = target.y - hy, dz = target.z - hz, L = Math.hypot(dx, dy, dz);
+    if (L < 0.8) return;
+    const steps = Math.ceil(L / 0.3);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps, x = hx + dx * t, y = hy + dy * t, z = hz + dz * t, g = groundHeight(x, z);
+      const b = buildingNear(x, z, 0.6);
+      if ((b && y < g + (b.height ?? 10) + 2.5 && !inPassage(x, z)) || y < g + 0.4) {
+        const k = Math.max(0.9 / L, (i - 1) / steps - 0.05);
+        target.set(hx + dx * k, hy + dy * k + (1 - k) * 1.0, hz + dz * k);
+        return;
+      }
+    }
+  }
+  /** turns the look state toward the input; with the stick at rest it eases back behind the rider */
+  private updateLook(dt: number) {
+    const yawTarget = this.lookBehind ? Math.PI : null;
+    if (yawTarget !== null) this.lookYaw += (yawTarget - this.lookYaw) * Math.min(1, dt * 8);
+    else if (Math.abs(this.look.x) > 0.01) this.lookYaw = Math.max(-2.6, Math.min(2.6, this.lookYaw + this.look.x * dt * 2.4));
+    else this.lookYaw *= Math.exp(-dt * 2.2);
+    if (Math.abs(this.look.y) > 0.01) this.lookPitch = Math.max(-0.35, Math.min(0.55, this.lookPitch + this.look.y * dt * 1.4));
+    else this.lookPitch *= Math.exp(-dt * 2.2);
+  }
+  /** the camera's target and the point it looks at, turned about the rider by the look and scaled by the view */
+  private applyLook(target: THREE.Vector3, at: THREE.Vector3, c: THREE.Vector3) {
+    const [far, up] = VIEWS[this.camView];
+    const ox = (target.x - c.x) * far, oz = (target.z - c.z) * far;
+    let oy = (target.y - c.y) * up;
+    if (Math.abs(this.lookYaw) < 1e-3 && Math.abs(this.lookPitch) < 1e-3 && this.camView === 0) return;
+    const cs = Math.cos(this.lookYaw), sn = Math.sin(this.lookYaw);
+    const rx = ox * cs + oz * sn, rz = -ox * sn + oz * cs;
+    oy += this.lookPitch * 4;
+    target.set(c.x + rx, c.y + oy, c.z + rz);
+    // never below the ground under the camera
+    target.y = Math.max(target.y, groundHeight(target.x, target.z) + 0.6);
+    const ax = at.x - c.x, az = at.z - c.z;
+    at.set(c.x + ax * cs + az * sn, at.y - this.lookPitch * 3, c.z - ax * sn + az * cs);
+  }
+
+  /** the fly-over view: the camera FLY_HEIGHT above the ground and FLY_BACK behind the bike along its heading (fx, fz),
+   *  looking down at a point a little ahead of it; the right stick still turns the view round the bike */
+  private flyOver(dt: number, fx: number, fz: number) {
+    const cam = this.camera, r = this.rider.root.position;
+    this.updateLook(dt);
+    const cs = Math.cos(this.lookYaw), sn = Math.sin(this.lookYaw), bx = -fx * cs - fz * sn, bz = fx * sn - fz * cs;
+    this.camTarget.set(r.x + bx * FLY_BACK, Math.max(r.y, groundHeight(r.x, r.z)) + FLY_HEIGHT + this.lookPitch * 8, r.z + bz * FLY_BACK);
+    if (this.snapCam) { cam.position.copy(this.camTarget); this.snapCam = false; }
+    cam.position.lerp(this.camTarget, Math.min(1, dt * 3));
+    cam.lookAt(r.x - bx * 4, r.y + 0.5, r.z - bz * 4);
+    const fov = innerWidth < innerHeight ? 66 : 54;
+    cam.fov += (fov - cam.fov) * Math.min(1, dt * 3);
+    cam.updateProjectionMatrix();
+  }
+
+  /**
+   * Puts a stuck bike back on the nearest road, facing along it and stopped (a free ride only; the guided and race rides
+   * keep the rider on the road themselves). Returns whether it did.
+   */
+  recoverBike() {
+    const f = this.free;
+    if (!f || this.phase !== 'riding') return false;
+    const r = roadAt(f.x, f.z);
+    if (!r) return false;
+    // facing along the road the way the bike was already heading
+    // (the bike faces (-sin yaw, -cos yaw); the road runs (sin angle, cos angle))
+    const fwd = -Math.sin(f.yaw) * Math.sin(r.angle) - Math.cos(f.yaw) * Math.cos(r.angle);
+    const yaw = r.angle + (fwd >= 0 ? Math.PI : 0);
+    f.x = r.x; f.z = r.z; f.yaw = yaw; f.v = 0; f.steer = 0; f.cruise = false; f.stopping = false;
+    return true;
+  }
+
+  /**
+   * Explore, on a bike: after arriving, the rider takes the bike wherever a bike can go. Nothing drives
+   * it any more: steer with freeInput.steer (-1 left .. 1 right); one freePedal() and the rider keeps
+   * pedalling until the brake; a tap on the brake stops the bike, holding it rolls the bike backwards.
+   * Buildings, trees, water, stairs and walls stop it (a wood's grass is rideable between its trees). endFreeRide() ends the ride.
+   */
+  freeRide() {
+    if (this.phase !== 'riding' || this.free) return;
+    const r = this.rider.root;
+    this.drone = null;
+    this.free = { x: r.position.x, z: r.position.z, y: r.position.y, yaw: r.rotation.y, v: 0, steer: 0, bumpT: 0, cruise: false, stopping: false, held: 0 };
+    warmCollision(r.position.x, r.position.z);
+    this.freeInput = { steer: 0, brake: false, throttle: 0, brakeForce: 1 };
+    this.speed = 0;
+  }
+  get freeRiding() { return !!this.free; }
+  /** pedalling (on until the brake) and rolling backwards, for the free-ride buttons */
+  get freeState() { return { pedalling: !!this.free?.cruise, reversing: (this.free?.v ?? 0) < -0.05 }; }
+  /** one press: start pedalling, and keep pedalling */
+  freePedal() {
+    const f = this.free;
+    if (!f) return;
+    f.cruise = true;
+    f.stopping = false;
+  }
+  /** press (true) and release (false) the brake: a press stops pedalling and brings the bike to a stop; held on, it rolls backwards */
+  freeBrake(on: boolean) {
+    const f = this.free;
+    if (!f || on === this.freeInput.brake) return;
+    this.freeInput.brake = on;
+    if (on) {
+      f.cruise = false;
+      f.stopping = true;
+      f.held = 0;
+      sfx.lane();
+    }
+  }
+  /** the end of a free ride: the ride is over, as when a route is finished */
+  endFreeRide() {
+    if (!this.free) return;
+    this.free = null;
+    this.phase = 'finished';
+    this.endTimer = 0.01;
+  }
+  /** held controls during a free ride: steering, and the brake (freeBrake); a controller's analog pedal (throttle, 0..1,
+   *  on top of the pedal toggle) and how hard its brake is pressed (brakeForce, 0..1; the keys brake fully) */
+  freeInput = { steer: 0, brake: false, throttle: 0, brakeForce: 1 };
+  /** seconds the brake is held at a standstill before the bike rolls backwards */
+  reverseDelay = 0.45;
+  private free: { x: number; z: number; y: number; yaw: number; v: number; steer: number; bumpT: number; cruise: boolean; stopping: boolean; held: number } | null = null;
+
+  /** a free ride: bike physics on open ground, stopped by whatever a bike can't go through */
+  private updateFree(dt: number) {
+    const f = this.free!, inp = this.freeInput;
+    this.time += dt;
+    warmOne(f.x, f.z);
+    // off the roads (and on the earth tracks of the science campus brief) the bike rolls slower and a little rougher
+    const rough = onEarth(f.x, f.z) || roadClearance(f.x, f.z, 6, -1, true) > 0.5;
+    const top = (8 + (this.bike?.speed ?? 3) * 0.5) * (rough ? 0.8 : 1) * this.speedFactor, back = 2.4;
+    if (rough && f.v > 2) this.shake = Math.max(this.shake, Math.min(0.025, f.v * 0.003));
+    if (inp.brake) f.held += dt;
+    // pedalling: the toggle pedals fully; a controller's trigger pedals as hard as it is pressed, its speed limited to
+    // match (never past the bike's top speed)
+    const thr = f.cruise ? 1 : inp.brake ? 0 : Math.max(0, Math.min(1, inp.throttle));
+    const cap = top * (0.35 + 0.65 * thr), accel = (2.6 + (this.bike?.acceleration ?? 3) * 0.3) * (0.25 + 0.75 * thr) * this.speedFactor;
+    if (thr > 0 && f.v >= -0.05) { f.v = f.v > cap ? Math.max(cap, f.v - 3 * dt) : Math.min(cap, f.v + accel * dt); f.stopping = false; }
+    else if (inp.brake && f.held > this.reverseDelay && f.v <= 0.05) {
+      // held on once stopped: walk the bike backwards
+      f.v = Math.max(-back, f.v - 2.2 * dt);
+      f.stopping = false;
+    } else if (f.stopping || (!inp.brake && f.v < 0)) {
+      // braking to a stop (a tap is enough), or letting go of the brake while rolling back
+      f.v = f.v > 0 ? Math.max(0, f.v - (inp.brake ? 4 + 6 * inp.brakeForce : 10) * dt) : Math.min(0, f.v + 6 * dt);
+      if (f.v === 0) f.stopping = false;
+    } else f.v = Math.max(0, f.v - 0.8 * dt);
+    // steering: the bars turn quickly, the bike turns more tightly when slow (and can be turned when stopped)
+    f.steer += (inp.steer - f.steer) * Math.min(1, dt * 7);
+    const rate = 1.7 * (f.v < 0.5 ? 0.6 : Math.min(1, 0.45 + 4 / (f.v + 3)));
+    // going backwards the bike swings the other way, as it would being walked back
+    f.yaw -= f.steer * rate * dt * (f.v < -0.05 ? -1 : 1);
+    const hx = -Math.sin(f.yaw), hz = -Math.cos(f.yaw), step = f.v * dt;
+    // the way it is moving (backwards when reversing): obstacles and banks are checked that way
+    const sgn = f.v < 0 ? -1 : 1, fx = hx * sgn, fz = hz * sgn;
+    // uphill slows, downhill rolls on
+    // (the ground at the level it is on: over the Legon Road cutting a bridge deck and the road below share x, z)
+    const g0 = groundFrom(f.x, f.z, f.y), G = (x: number, z: number) => groundFrom(x, z, g0);
+    if (f.v > 0.2) f.v = Math.max(0, Math.min(top * 1.3, f.v - 9.8 * 0.6 * ((G(f.x + hx, f.z + hz) - g0) / 1) * dt));
+    // move, sliding along whatever is in the way; a wall or a bank too steep to ride stops the bike
+    if (!bounds) bounds = mapBounds();
+    // (a bank steeper than about 1 in 1.5 just ahead counts as a wall)
+    // (up on a bridge deck over the Legon Road cutting, what stands on the road below it, a pier, does not stop the bike)
+    const up = (x: number, z: number) => { const d = deckAt(x, z); return !!d && g0 > d.h - 2.5; };
+    const blocked = (x: number, z: number) => !up(x, z) && freeBlocked(x, z);
+    const ok = (x: number, z: number) => !blocked(x + fx * 0.7, z + fz * 0.7) && !blocked(x, z)
+      && Math.abs(G(x + fx * 0.6, z + fz * 0.6) - G(x, z)) < 0.4
+      && x > bounds!.minX && x < bounds!.maxX && z > bounds!.minZ && z < bounds!.maxZ;
+    const nx = f.x + hx * step, nz = f.z + hz * step;
+    if (step !== 0) {
+      if (ok(nx, nz)) { f.x = nx; f.z = nz; }
+      else if (ok(nx, f.z)) { f.x = nx; f.v *= 0.92; }
+      else if (ok(f.x, nz)) { f.z = nz; f.v *= 0.92; }
+      else {
+        if (Math.abs(f.v) > 2.5 && f.bumpT <= 0) { sfx.bump(); this.shake = Math.max(this.shake, Math.min(0.3, f.v * 0.03)); f.bumpT = 0.6; }
+        f.v = 0;
+      }
+    }
+    if (f.bumpT > 0) f.bumpT -= dt;
+    this.speed = Math.abs(f.v);
+    // the rider on the bike, leaning into the turn
+    const r = this.rider;
+    f.y = G(f.x, f.z);
+    r.root.position.set(f.x, f.y, f.z);
+    r.root.rotation.y = f.yaw;
+    this.slope += (slopePitch(f.x, f.z, f.yaw, f.y) - this.slope) * Math.min(1, dt * 8);
+    r.root.rotation.order = 'YXZ'; r.root.rotation.x = this.slope;
+    this.lean += (-f.steer * Math.min(1, Math.max(0, f.v) / 6) * 0.4 - this.lean) * Math.min(1, dt * 6);
+    this.crank += dt * Math.max(0, f.v) * 0.9 * (f.cruise ? 1 : 0.15);
+    for (const w of r.wheels) w.rotation.x -= (f.v / 0.38) * dt;
+    r.crank.rotation.x = -this.crank;
+    r.legs[0].rotation.x = Math.sin(this.crank) * 0.55;
+    r.legs[1].rotation.x = Math.sin(this.crank + Math.PI) * 0.55;
+    r.body.rotation.z = this.lean;
+    r.body.rotation.x = 0;
+    r.body.position.y = 0;
+    this.emitHud(null);
+  }
+  private drone: { x: number; z: number; a: number } | null = null;
+
+  /** Guided ride: move on from the place it stopped at. */
+  continueTour() {
+    if (!this.guideWait) return;
+    this.drone = null;
+    this.guideWait = false;
+    this.guideIdx++;
+    this.onGuide(null);
+  }
+
+  abort() {
+    this.showcase();
+  }
+
+  private reset() {
+    for (const w of this.walkers) { w.d = -1e9; w.mesh.visible = false; }
+    for (const o of this.obstacles) this.dynamic.remove(o.mesh);
+    for (const c of this.coinList) this.dynamic.remove(c.mesh);
+    for (const f of this.features) this.dynamic.remove(f.mesh);
+    for (const t of this.treasures) this.dynamic.remove(t.mesh);
+    this.obstacles = [];
+    this.coinList = [];
+    this.features = [];
+    this.treasures = [];
+    this.treasureFound = 0;
+    this.vx = this.rhythm = this.repairT = this.puddleT = this.prevD = this.draftHold = this.tapGap = 0;
+    this.lastTap = -10;
+    this.stamina = 1;
+    this.onRamp = this.pedalDown = this.photo = false;
+    if (this.drafting) { this.drafting = false; this.onDraft(false); }
+    this.repairKits = this.items.repairKits;
+    this.d = this.x = this.y = this.vy = this.speed = this.boost = this.boostTime = this.coins = this.time = 0;
+    this.slowTimer = this.endTimer = this.lean = this.shake = this.shield = 0;
+    this.braking = false;
+    this.guideIdx = this.guideLook = 0;
+    this.guideWait = false;
+    this.drone = null;
+    this.free = null;
+    this.freeInput = { steer: 0, brake: false, throttle: 0, brakeForce: 1 };
+    this.lane = 1;
+    this.paused = false;
+    this.rec = { step: GHOST_STEP, d: [], x: [] };
+    for (const p of this.rigPool) p.rig.root.visible = false;
+    for (const p of this.solidPool) p.rig.root.visible = false;
+    this.rider.body.rotation.set(0, 0, 0);
+    this.rider.body.position.set(0, 0, 0);
+  }
+
+  /** Road frame at ride distance d (the start line is `lead` metres into the track). */
+  private pose(d: number, x = 0) {
+    return this.track.pose(d + this.route.lead, x);
+  }
+
+  /** Puts an object on the road at ride distance d, lateral x, facing along the road. */
+  private place(obj: THREE.Object3D, d: number, x: number, y = 0, yaw = 0) {
+    const p = this.pose(d, x);
+    obj.position.set(p.x, y + layerHeight(p.x, p.z, p.tx, p.tz), p.z);
+    obj.rotation.y = p.yaw + yaw;
+  }
+
+  private resize() {
+    const w = innerWidth;
+    const h = innerHeight;
+    this.camera.aspect = w / h;
+    // keep the road readable in portrait
+    this.camera.fov = w < h ? 72 : 60;
+    this.camera.updateProjectionMatrix();
+  }
+
+  private get baseSpeed() {
+    const s = this.bike?.speed ?? 3;
+    return 15 + s * 1.1;
+  }
+
+  private frame(raw: number) {
+    if (this.sleep && this.phase === 'showcase') return;
+    // (nothing to draw while the campus loads behind the menus)
+    if (!this.isReady) return;
+    const dt = Math.min(raw, 1 / 20);
+    // auto graphics: average frame rate over a few seconds of riding
+    if (this.watchSpeed && this.quality === 'high' && this.phase === 'riding' && !this.paused && raw < 1) {
+      this.fpsFrames++;
+      this.fpsTime += raw;
+      if (this.fpsTime > 4) {
+        const fps = this.fpsFrames / this.fpsTime;
+        this.fpsFrames = this.fpsTime = 0;
+        if (fps < 28) {
+          this.watchSpeed = false;
+          this.onSlow();
+        }
+      }
+    }
+    if (this.guest) {
+      const cam = this.camera;
+      if (!this.paused) this.guest.update(dt, cam);
+      const f = this.guest.focus;
+      this.rider.root.position.set(f.x, groundHeight(f.x, f.z), f.z);
+      this.wfx?.update(dt, cam);
+      this.tufts.update(cam.position.x, cam.position.z);
+      this.draw(cam);
+      return;
+    }
+    if (!this.paused && !this.photo) this.update(dt);
+    this.render(dt);
+  }
+
+  private update(dt: number) {
+    if (this.phase === 'cinematic') {
+      this.crank += dt * 6;
+      this.animateRider(dt, 6);
+      return;
+    }
+    if (this.phase === 'showcase') {
+      this.updateWalkers(dt);
+      this.orbit += dt * (this.reducedMotion ? 0.04 : 0.18);
+      this.crank += dt * 3;
+      this.animateRider(dt, 0.4);
+      return;
+    }
+
+    if (this.phase === 'countdown') {
+      this.countdownT -= dt;
+      const n = Math.ceil(this.countdownT / 0.8);
+      const label = this.countdownT > 0 ? String(n) : 'GO!';
+      if (label !== this.lastCount) {
+        this.lastCount = label;
+        if (this.countdownT > 0) sfx.count(); else sfx.go();
+      }
+      if (this.countdownT <= 0) this.phase = 'riding';
+      this.emitHud(this.countdownT > 0 ? label : null);
+      this.animateRider(dt, 0);
+      return;
+    }
+
+    if (this.phase === 'riding' && this.free) return this.updateFree(dt);
+    if (this.phase === 'riding') {
+      this.time += dt;
+      const progress = this.d / this.route.length;
+      const difficulty = Math.min(1, progress * 1.3 + (this.route.difficulty - 2) * 0.1);
+      let target = this.cruiseSpeed != null ? this.cruiseSpeed * this.speedFactor : this.baseSpeed + difficulty * 6;
+      const boosting = this.boostTime > 0;
+      if (boosting) {
+        target *= 1.45;
+        this.boostTime -= dt;
+      }
+      // stamina: long boosts tire the legs, cruising brings them back
+      if (boosting) this.stamina = Math.max(0, this.stamina - dt * 0.2 * (1.3 - 0.1 * (this.bike?.endurance ?? 3)));
+      else this.stamina = Math.min(1, this.stamina + dt * (this.braking || this.repairT > 0 ? 0.3 : 0.14) - dt * 0.015 * this.rhythm);
+      if (this.stamina < 0.3) target *= 0.82 + 0.18 * (this.stamina / 0.3);
+      // pedal rhythm fades without steady taps
+      if (this.time - this.lastTap > Math.max(0.9, this.tapGap * 1.6)) this.rhythm = Math.max(0, this.rhythm - dt * 1.2);
+      if (this.stamina > 0.3) target *= 1 + 0.06 * this.rhythm;
+      this.updateDraft(dt);
+      if (this.drafting) {
+        target *= 1.07;
+        this.boost = Math.min(1, this.boost + dt * 0.035);
+      }
+      if (this.puddleT > 0) {
+        target *= 0.86;
+        this.puddleT -= dt;
+      }
+      if (this.slowTimer > 0) {
+        target *= 0.6;
+        this.slowTimer -= dt;
+      }
+      if (this.tour) target = (this.cruiseSpeed ?? this.tour.speed) * this.speedFactor;
+      if (this.shield > 0) this.shield -= dt;
+      if (this.honkCool > 0) this.honkCool -= dt;
+      const accel = 4 + (this.bike?.acceleration ?? 3) * 1.6;
+      if (this.repairT > 0) {
+        // stopped at the roadside fixing the bike
+        this.repairT -= dt;
+        this.speed = Math.max(0, this.speed - 30 * dt);
+        if (this.repairT <= 0) {
+          this.shield = 2.5;
+          this.slowTimer = 0.8;
+          sfx.go();
+        }
+      } else if (this.braking && !boosting) {
+        // disc brakes stop about twice as hard as rim brakes
+        const floor = 2.5;
+        this.speed = Math.max(Math.min(this.speed, floor), this.speed - (this.brakeLevel > 1 ? 26 : 13) * dt);
+      } else this.speed += Math.sign(target - this.speed) * Math.min(Math.abs(target - this.speed), accel * dt * (target < this.speed ? 2.5 : 1));
+      if (this.tour) {
+        // roll gently to a stop at the next place, then wait there
+        const stop = this.tour.stops[this.guideIdx];
+        if (this.guideWait) this.speed = 0;
+        else if (stop) {
+          const rem = stop.d - this.d;
+          if (rem <= 0.4) {
+            this.guideWait = true;
+            this.speed = 0;
+            this.onGuide(this.guideIdx);
+          } else this.speed = Math.min(this.speed, Math.sqrt(3 * rem) + 0.3);
+        }
+      }
+    } else {
+      // crashed or finished: coast to a stop
+      this.speed = Math.max(0, this.speed - (this.phase === 'crashed' ? 30 : 10) * dt);
+      this.endTimer -= dt;
+      if (this.endTimer <= 0 && this.endTimer > -1) {
+        this.endTimer = -10;
+        this.onEnd({ distance: Math.min(this.d, this.route.length), coins: this.coins, time: this.time, finished: this.phase === 'finished' });
+      }
+    }
+
+    this.prevD = this.d;
+    this.d += this.speed * dt;
+    if (this.phase === 'riding' || this.phase === 'finished') {
+      while (this.rec.d.length * GHOST_STEP <= this.time) {
+        this.rec.d.push(Math.round(Math.min(this.d, this.route.length + 30) * 100) / 100);
+        this.rec.x.push(Math.round(this.x * 100) / 100);
+      }
+    }
+
+    this.steer(dt);
+    this.vertical(dt);
+
+    if (this.phase === 'riding') {
+      this.spawn();
+      this.collide();
+      if (this.d >= this.route.length) {
+        this.phase = 'finished';
+        this.endTimer = 1.4;
+        sfx.finish();
+      }
+    }
+    this.updateDynamic(dt);
+    this.updateTraffic(dt);
+    this.updateWalkers(dt);
+    this.updateBots(dt);
+    this.updateGhost(dt);
+    this.crank += dt * this.speed * 0.9 * (1 + 0.25 * this.rhythm);
+    this.animateRider(dt, this.speed);
+    this.emitHud(null);
+  }
+
+  /** grip: how well the tyres hold, from the grip upgrade and the weather */
+  private get grip() {
+    const g = 1 + 0.15 * this.upgrades.grip;
+    return this.weather === 'rain' ? g * (0.62 + 0.06 * this.upgrades.grip) : g;
+  }
+
+  /** Lane changes as a spring: quick and smooth on a dry road, looser and floatier in the rain. */
+  private steer(dt: number) {
+    const handling = this.bike?.handling ?? 3;
+    const k = (95 + handling * 14) * this.grip;
+    // dry roads are near critically damped; wet ones overshoot a little
+    const c = 2 * Math.sqrt(k) * (this.weather === 'rain' ? 0.62 + 0.08 * this.upgrades.grip : 1);
+    const tx = LANES[this.lane];
+    const h = dt / 2;
+    for (let i = 0; i < 2; i++) {
+      this.vx += (k * (tx - this.x) - c * this.vx) * h;
+      this.vx = Math.max(-16, Math.min(16, this.vx));
+      this.x += this.vx * h;
+    }
+    this.x = Math.max(-ROAD_HALF + 0.5, Math.min(ROAD_HALF - 0.5, this.x));
+    // lean into the bend (v²·curvature/g) and into lane changes
+    const v = this.speed;
+    const a = this.pose(this.d), b = this.pose(this.d + 4);
+    const curve = ((b.tx - a.tx) * a.nx + (b.tz - a.tz) * a.nz) / 4;
+    const turn = Math.atan((v * v * curve) / 9.8);
+    const target = this.y > 0.05 ? this.lean * 0.95 : Math.max(-0.45, Math.min(0.45, -turn * 0.8 - this.vx * 0.045));
+    this.lean += (target - this.lean) * Math.min(1, dt * 8);
+  }
+
+  /** Jumps, ramps and speed bumps. */
+  private vertical(dt: number) {
+    let ramp: Feature | null = null;
+    for (const f of this.features) {
+      if (f.kind !== 'ramp' || this.d < f.d || this.d > f.d + f.len || Math.abs(this.x - f.x) > f.w / 2 + 0.15) continue;
+      if (this.y <= (RAMP.h * (this.d - f.d)) / f.len + 0.2) ramp = f;
+    }
+    if (ramp && this.phase !== 'crashed') {
+      // ride up the ramp surface
+      const slope = RAMP.h / ramp.len;
+      this.y = slope * (this.d - ramp.d);
+      this.vy = slope * this.speed;
+      this.onRamp = true;
+      return;
+    }
+    if (this.onRamp) {
+      // off the lip: airborne
+      this.onRamp = false;
+      if (this.y > 0.1) {
+        this.vy = Math.max(this.vy, 3.5) + 1.8;
+        sfx.jump();
+        this.onJump();
+      }
+    }
+    for (const f of this.features) {
+      if (f.kind !== 'bump' || f.done || this.prevD > f.d || this.d < f.d) continue;
+      f.done = true;
+      if (this.y < 0.05 && this.phase === 'riding') {
+        this.vy = 2.4 + this.speed * 0.04;
+        this.y = 0.01;
+        this.shake = Math.max(this.shake, 0.12);
+        sfx.bump();
+        this.onJump();
+      }
+    }
+    if (this.y > 0 || this.vy > 0) {
+      this.vy -= GRAVITY * dt;
+      this.y = Math.max(0, this.y + this.vy * dt);
+      if (this.y === 0) this.vy = 0;
+    }
+  }
+
+  /** Slipstream: riding just behind a rival, in their line. */
+  private updateDraft(dt: number) {
+    let behind = false;
+    for (const r of this.rivals) {
+      if (!r.rig.root.visible) continue;
+      const [gd, gx] = this.rivalPos(r);
+      const gap = gd - this.d;
+      if (gap > 1.2 && gap < 8.5 && Math.abs(gx - this.x) < 0.9) { behind = true; break; }
+    }
+    if (behind) this.draftHold = 0.35;
+    else this.draftHold -= dt;
+    const on = this.draftHold > 0 && this.speed > 8;
+    if (on !== this.drafting) {
+      this.drafting = on;
+      this.onDraft(on);
+    }
+  }
+
+  /** a rival's road distance and offset now */
+  private rivalPos(r: RivalState): [number, number] {
+    return r.sim ? [r.sim.d, r.sim.x] : this.runAt(r.run, this.rivalT(r));
+  }
+
+  /** Keeps a few students walking on the pavements around the rider, reusing the same figures. */
+  private updateWalkers(dt: number) {
+    const want = this.quality === 'low' ? 10 : 22;
+    const end = this.route.length + this.route.tail - 5;
+    while (this.walkers.length < want) {
+      const mesh = buildObstacle('pedestrian');
+      mesh.traverse((o) => { o.castShadow = false; });
+      mesh.visible = false;
+      this.dynamic.add(mesh);
+      this.walkers.push({ mesh, d: -1e9, x: 0, v: 0, t: Math.random() * 6 });
+    }
+    const spread = this.phase === 'showcase' || this.walkers.every((w) => !w.mesh.visible);
+    for (let i = 0; i < this.walkers.length; i++) {
+      const w = this.walkers[i];
+      w.mesh.visible = i < want && w.d > this.d - 25 && w.d > -this.route.lead + 2 && w.d < end;
+      if (!w.mesh.visible && i < want) {
+        // respawn: spread around at first, later far ahead where it can't pop into view
+        const d = this.d + (spread ? -20 + Math.random() * 200 : 90 + Math.random() * 110);
+        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF + 0.4 + Math.random() * 1.0);
+        const p = this.pose(d, x);
+        if (d >= end || d < -this.route.lead + 2 || buildingAt(p.x, p.z, 0.6) || this.track.distanceToRoad(p.x, p.z) < ROAD_HALF + 0.3) continue;
+        Object.assign(w, { d, x, v: (Math.random() < 0.5 ? -1 : 1) * (1.1 + Math.random() * 0.5) });
+        w.mesh.visible = true;
+      }
+      if (!w.mesh.visible) continue;
+      w.d += w.v * dt;
+      w.t += dt * 7;
+      this.place(w.mesh, w.d, w.x, 0.12 + Math.abs(Math.sin(w.t)) * 0.05, w.v < 0 ? Math.PI : 0);
+      w.mesh.rotation.z = Math.sin(w.t) * 0.04;
+    }
+  }
+
+  private updateGhost(dt: number) {
+    for (const r of this.rivals) {
+      const rig = r.rig;
+      if (r.live && r.finish === Infinity && r.run.d.length && r.run.d[r.run.d.length - 1] >= this.route.length) r.finish = this.finishTime(r.run);
+      let gd: number, gx: number, v: number, vx: number, y = 0;
+      if (r.sim) {
+        ({ d: gd, x: gx, v, vx, y } = r.sim);
+      } else {
+        const t = this.rivalT(r);
+        [gd, gx] = this.runAt(r.run, t);
+        const [pd, px] = this.runAt(r.run, Math.max(0, t - 0.2));
+        v = (gd - pd) / 0.2;
+        vx = (gx - px) / 0.2;
+      }
+      const p = this.pose(gd, gx);
+      rig.root.position.set(p.x, y + layerHeight(p.x, p.z, p.tx, p.tz), p.z);
+      rig.root.rotation.y = p.yaw;
+      r.crank += dt * v * 0.9;
+      for (const w of rig.wheels) w.rotation.x -= (v / 0.38) * dt;
+      rig.crank.rotation.x = -r.crank;
+      rig.legs[0].rotation.x = Math.sin(r.crank) * 0.55;
+      rig.legs[1].rotation.x = Math.sin(r.crank + Math.PI) * 0.55;
+      // rivals lean into bends and line changes too
+      const q = this.pose(gd + 4);
+      const curve = ((q.tx - p.tx) * p.nx + (q.tz - p.tz) * p.nz) / 4;
+      const lean = Math.max(-0.45, Math.min(0.45, -Math.atan((v * v * curve) / 9.8) * 0.8 - vx * 0.045));
+      r.lean += (lean - r.lean) * Math.min(1, dt * 6);
+      rig.body.rotation.z = r.sim && r.sim.slowT > 0.6 ? Math.sin(this.time * 18) * 0.12 : r.lean;
+      // rivals ride on past their finish line, then leave the road
+      rig.root.visible = gd < this.route.length + 25;
+    }
+  }
+
+  /** Bots ride live: their own line, dodging traffic, the odd mistake, and a pull towards you that depends on the difficulty. */
+  private updateBots(dt: number) {
+    if (this.phase === 'countdown' || this.phase === 'showcase' || this.phase === 'cinematic') return;
+    const diff = DIFF[this.difficultyLevel];
+    for (const r of this.rivals) {
+      const b = r.sim, st = r.bot;
+      if (!b || !st) continue;
+      const progress = Math.min(1, b.d / this.route.length);
+      let target = (16.5 + this.route.difficulty * 0.6) * st.pace * diff.botPace * (1 + 0.28 * Math.min(1, progress * 1.3));
+      // rubber band: bots behind you push, bots ahead ease off
+      if (this.phase === 'riding') {
+        const gap = this.d - b.d;
+        target *= gap > 0 ? 1 + Math.min(1, gap / 80) * diff.catchUp : 1 - Math.min(1, -gap / 80) * diff.ease;
+      }
+      // the odd mistake: a wobble that costs speed, or running wide
+      b.nextMistake -= dt;
+      if (b.nextMistake <= 0) {
+        b.nextMistake = 10 + Math.random() * 30 * (0.4 + st.skill);
+        if (Math.random() < 0.55) b.slowT = 0.9 + Math.random();
+        else b.wide = (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.6);
+      }
+      if (b.slowT > 0) {
+        b.slowT -= dt;
+        target *= 0.62;
+      }
+      b.wide *= Math.max(0, 1 - dt * 0.6);
+      // look up the road now and then
+      b.think -= dt;
+      if (b.think <= 0) {
+        b.think = 0.25 + (1 - st.skill) * 0.4;
+        const look = 8 + st.skill * 18;
+        const blocked = (lane: number) => this.obstacles.some((o) => !o.hit && !o.fling && o.d - b.d > 1.5 && o.d - b.d < look && Math.abs(o.x - LANES[lane]) < (o.spec.width + 0.6) / 2 + 0.3);
+        if (blocked(b.lane)) {
+          const free = [b.lane - 1, b.lane + 1].filter((l) => l >= 0 && l <= 2 && !blocked(l));
+          if (free.length) b.lane = free[(Math.random() * free.length) | 0];
+          else b.slowT = Math.max(b.slowT, 0.4);
+        } else if (b.lane !== st.lane && Math.random() < 0.25) {
+          const toward = b.lane + Math.sign(st.lane - b.lane);
+          if (!blocked(toward)) b.lane = toward;
+        }
+      }
+      // hop low barriers right in front
+      if (b.y === 0) {
+        for (const o of this.obstacles) {
+          if (o.hit || o.spec.clearHeight > 1 || Math.abs(o.x - b.x) > 1.2) continue;
+          const ahead = o.d - b.d;
+          if (ahead > 0 && ahead < Math.max(3, b.v * 0.28)) { b.vy = JUMP_V; break; }
+        }
+      }
+      b.v += Math.sign(target - b.v) * Math.min(Math.abs(target - b.v), (target < b.v ? 12 : 7) * dt);
+      b.prevD = b.d;
+      b.d += b.v * dt;
+      // steer to their line
+      const tx = Math.max(-ROAD_HALF + 0.6, Math.min(ROAD_HALF - 0.6, LANES[b.lane] + st.line + b.wide));
+      const k = 60 + st.skill * 60, c = 2 * Math.sqrt(k) * 0.9;
+      b.vx += (k * (tx - b.x) - c * b.vx) * dt;
+      b.x += b.vx * dt;
+      // ramps launch bots too
+      const ramp = this.features.find((f) => f.kind === 'ramp' && b.d >= f.d && b.d <= f.d + f.len && Math.abs(b.x - f.x) < f.w / 2 + 0.15);
+      if (ramp && b.y <= (RAMP.h * (b.d - ramp.d)) / ramp.len + 0.2) {
+        b.y = (RAMP.h * (b.d - ramp.d)) / ramp.len;
+        b.vy = (RAMP.h / ramp.len) * b.v + 1.8;
+      } else if (b.y > 0 || b.vy > 0) {
+        b.vy -= GRAVITY * dt;
+        b.y = Math.max(0, b.y + b.vy * dt);
+        if (b.y === 0) b.vy = 0;
+      }
+      // knocks: bots don't crash out, they lose time
+      if (b.slowT < 0.5) {
+        for (const o of this.obstacles) {
+          if (o.hit || b.y > o.spec.clearHeight) continue;
+          if (Math.abs(o.d - b.d) < (o.spec.length + RIDER_LEN) / 2 * 0.8 && Math.abs(o.x - b.x) < (o.spec.width + RIDER_W) / 2 * 0.75) {
+            b.slowT = o.spec.hazard ? 0.7 : 1.5;
+            if (!o.spec.hazard) b.v *= 0.55;
+            break;
+          }
+        }
+      }
+      if (this.phase === 'riding') {
+        while (r.run.d.length * GHOST_STEP <= this.time) {
+          r.run.d.push(Math.round(Math.min(b.d, this.route.length + 30) * 100) / 100);
+          r.run.x.push(Math.round(b.x * 100) / 100);
+        }
+        if (r.finish === Infinity && b.d >= this.route.length) r.finish = this.time - (b.d - this.route.length) / Math.max(1, b.v);
+      }
+    }
+  }
+
+  /** Traffic that behaves: cars brake behind slower things, honk at riders who cut in, and ease over to let you by. */
+  private updateTraffic(dt: number) {
+    for (const o of this.obstacles) {
+      if (!o.cruise || o.hit || o.fling) continue;
+      let want = o.cruise;
+      for (const q of this.obstacles) {
+        if (q === o || q.fling) continue;
+        const ahead = q.d - o.d;
+        if (ahead > 0 && ahead < 16 && Math.abs(q.x - o.x) < 1.7) want = Math.min(want, ahead < 7 ? q.vd * 0.8 : q.vd + (ahead - 7) * 0.6);
+      }
+      // the rider just in front, in its lane
+      const ra = this.d - o.d;
+      if (this.phase === 'riding' && ra > 0 && ra < 14 && Math.abs(this.x - o.x) < 1.4) {
+        want = Math.min(want, this.speed * 0.85);
+        if (ra < 9 && o.honk <= 0 && this.speed < o.vd + 4) this.honk(o);
+      }
+      if (o.honk > 0) o.honk -= dt;
+      o.vd += Math.sign(want - o.vd) * Math.min(Math.abs(want - o.vd), (want < o.vd ? 9 : 3) * dt);
+      // give way: a rider closing in from behind in its lane, so drift towards the kerb
+      const behind = o.d - this.d;
+      let shift = 0;
+      if (this.phase === 'riding' && behind > 4 && behind < 26 && Math.abs(this.x - LANES[o.lane]) < 1.4) shift = o.lane === 0 ? -0.6 : o.lane === 2 ? 0.6 : this.x >= LANES[1] ? -0.6 : 0.6;
+      o.shift += Math.sign(shift - o.shift) * Math.min(Math.abs(shift - o.shift), 0.9 * dt);
+      o.x = LANES[o.lane] + o.shift;
+      o.d += o.vd * dt;
+      this.place(o.mesh, o.d, o.x);
+    }
+  }
+
+  private honk(o: Obstacle) {
+    o.honk = 6;
+    if (this.honkCool > 0) return;
+    this.honkCool = 2.5;
+    sfx.honk();
+  }
+
+  private ghostGap(): number | null {
+    const r = this.rivals[0];
+    if (!r || this.phase === 'countdown') return null;
+    const [gd] = this.rivalPos(r);
+    // the rival has finished: the gap is how long ago it crossed the line
+    if (gd >= this.route.length && r.finish < Infinity) return this.time - r.finish;
+    return (gd - this.d) / Math.max(this.speed, 8);
+  }
+
+  private standing(): { pos: number; of: number } | null {
+    if (this.rivals.length < 2) return null;
+    const ahead = this.rivals.filter((r) => {
+      if (this.d >= this.route.length) return r.finish < this.time;
+      return this.rivalPos(r)[0] > this.d;
+    }).length;
+    return { pos: ahead + 1, of: this.rivals.length + 1 };
+  }
+
+  private emitHud(countdown: string | null) {
+    this.onHud({
+      distance: Math.min(this.d, this.route.length),
+      routeLength: this.route.length,
+      coins: this.coins,
+      boost: this.boost,
+      boosting: this.boostTime > 0,
+      speed: this.speed,
+      countdown,
+      pos: [this.rider.root.position.x, this.rider.root.position.z],
+      yaw: this.rider.root.rotation.y,
+      ghostGap: this.ghostGap(),
+      place: this.standing(),
+      helmets: this.helmets,
+      braking: this.braking,
+      next: this.route.kind === 'explore' && !this.free ? (() => { const n = this.nextStep(); return n && { text: n.step.text, turn: n.step.turn, dist: n.dist }; })() : null,
+      kmh: Math.round(this.speed * 1.6),
+      stamina: this.stamina,
+      drafting: this.drafting,
+      rhythm: this.rhythm,
+      repairKits: this.repairKits,
+      repairing: this.repairT > 0,
+    });
+  }
+
+  // ---------- spawning ----------
+
+  private spawn() {
+    const diff = DIFF[this.difficultyLevel];
+    while (!this.holdSpawns && this.nextSpawn < this.d + 230 && this.nextSpawn < this.route.length - 50) {
+      this.spawnRow(this.nextSpawn);
+      const progress = this.nextSpawn / this.route.length;
+      // explore rides are about finding the way, so traffic is lighter
+      const gap = THREE.MathUtils.lerp(42, 24, Math.min(1, progress * 1.4)) * (this.route.kind === 'explore' ? 1.8 : 1) * diff.gap * (0.8 + Math.random() * 0.45);
+      // ramps, speed bumps and puddles go in the quiet stretch between rows
+      this.spawnFeature(this.nextSpawn + gap * 0.5);
+      this.nextSpawn += gap;
+    }
+  }
+
+  private spawnFeature(d: number) {
+    if (d > this.route.length - 40) return;
+    const k = kit();
+    const r = Math.random();
+    const footpath = this.route.classAt(d) === 4;
+    if (this.weather === 'rain' && r < 0.45) {
+      const lane = (Math.random() * 3) | 0;
+      const x = LANES[lane] + (Math.random() - 0.5) * 0.8;
+      const w = 1.4 + Math.random() * 0.8, len = 2 + Math.random() * 1.6;
+      const mesh = new THREE.Mesh(k.puddle, k.puddleMat);
+      mesh.scale.set(w / 2, 1, len / 2);
+      this.place(mesh, d, x, 0.025);
+      this.addFeature({ kind: 'puddle', mesh, d, x, w, len, done: false });
+    } else if (r > 0.86) {
+      // a jump ramp in a free lane, with coins to collect in the air
+      const lane = (Math.random() * 3) | 0;
+      if (this.treasures.some((t) => t.lane === lane && Math.abs(t.d - d) < 12)) return;
+      const mesh = new THREE.Mesh(k.ramp, k.rampMat);
+      mesh.castShadow = this.quality === 'high';
+      this.place(mesh, d, LANES[lane]);
+      this.addFeature({ kind: 'ramp', mesh, d, x: LANES[lane], w: RAMP.w, len: RAMP.len, done: false });
+      for (let i = 1; i <= 4; i++) this.addCoin(LANES[lane], 1.5 + Math.sin((i / 5) * Math.PI) * 1.1, d + RAMP.len + i * 2.6);
+    } else if (r > 0.76 && !footpath) {
+      const mesh = new THREE.Mesh(k.bump, k.bumpMat);
+      this.place(mesh, d, 0, 0.02);
+      this.addFeature({ kind: 'bump', mesh, d, x: 0, w: ROAD_HALF * 2, len: 0.5, done: false });
+    }
+  }
+
+  private addFeature(f: Feature) {
+    f.mesh.matrixAutoUpdate = false;
+    f.mesh.updateMatrix();
+    this.dynamic.add(f.mesh);
+    this.features.push(f);
+  }
+
+  private spawnRow(d: number) {
+    // calm rides: coins only, nothing to dodge
+    if (this.calm) {
+      if (this.pickups) this.addCoinLine((Math.random() * 3) | 0, d, 5);
+      return;
+    }
+    const progress = d / this.route.length;
+    const lanes = [0, 1, 2].sort(() => Math.random() - 0.5);
+    // no cars or trotros on footpaths
+    const footpath = this.route.classAt(d) === 4;
+    const highKinds: ObstacleKind[] = footpath ? ['pedestrian'] : ['car', 'car', 'trotro', 'pedestrian'];
+    const high = () => highKinds[(Math.random() * highKinds.length) | 0];
+    const r = Math.random();
+    const double = DIFF[this.difficultyLevel].double;
+
+    if (r < 0.35) {
+      this.addObstacle(high(), lanes[0], d);
+      this.addCoinLine(lanes[1], d - 8, 5);
+    } else if (r < 0.35 + double && progress > 0.15) {
+      this.addObstacle(high(), lanes[0], d);
+      this.addObstacle(high(), lanes[1], d + (Math.random() - 0.5) * 4);
+      this.addCoinLine(lanes[2], d - 10, 6);
+    } else if (r < 0.8) {
+      const kind: ObstacleKind = Math.random() < 0.6 ? 'barrier' : 'pothole';
+      const n = progress > 0.3 ? 3 : 1 + ((Math.random() * 2) | 0);
+      for (let k = 0; k < n; k++) this.addObstacle(kind, lanes[k], d);
+      if (kind === 'barrier') this.addCoinArc(lanes[0], d);
+      else this.addCoinLine(lanes[0], d - 6, 4);
+    } else {
+      this.addObstacle(high(), lanes[0], d);
+      this.addObstacle('barrier', lanes[1], d);
+      this.addCoinArc(lanes[1], d);
+    }
+  }
+
+  private addObstacle(kind: ObstacleKind, lane: number, d: number) {
+    // keep treasure spots clear
+    if (this.treasures.some((t) => t.lane === lane && Math.abs(t.d - d) < 8)) return;
+    const spec = OBSTACLES[kind];
+    const mesh = buildObstacle(kind);
+    // some cars are moving with traffic
+    const vd = kind === 'car' && Math.random() < DIFF[this.difficultyLevel].moving ? 5 + Math.random() * 3 : 0;
+    const yaw = kind === 'pedestrian' ? (Math.random() - 0.5) * Math.PI : kind === 'pothole' ? Math.random() * Math.PI : 0;
+    const x = LANES[lane] + (kind === 'pothole' || kind === 'pedestrian' ? (Math.random() - 0.5) * 0.6 : 0);
+    this.place(mesh, d, x, 0, yaw);
+    this.dynamic.add(mesh);
+    this.obstacles.push({ spec, mesh, lane, x, d, vd, cruise: vd, hit: false, passed: false, honk: 0, shift: 0 });
+  }
+
+  private addCoinLine(lane: number, d: number, n: number) {
+    for (let k = 0; k < n; k++) this.addCoin(LANES[lane], 0.9, d + k * 3);
+  }
+
+  private addCoinArc(lane: number, d: number) {
+    // follows the jump arc over an obstacle at d
+    const v = Math.max(this.speed, this.baseSpeed);
+    for (let k = -3; k <= 3; k++) {
+      const dd = d + k * 2.2;
+      const t = (dd - d) / v + JUMP_V / GRAVITY;
+      const h = Math.max(0, JUMP_V * t - 0.5 * GRAVITY * t * t);
+      this.addCoin(LANES[lane], 0.9 + h, dd);
+    }
+  }
+
+  private addCoin(x: number, y: number, d: number) {
+    if (d > this.route.length - 20) return;
+    const mesh = buildCoin();
+    this.place(mesh, d, x, y);
+    this.dynamic.add(mesh);
+    this.coinList.push({ mesh, x, y, d, taken: false, t: 0 });
+  }
+
+  // ---------- collisions ----------
+
+  private collide() {
+    for (const o of this.obstacles) {
+      if (o.hit || this.repairT > 0) continue;
+      const overlapD = Math.abs(o.d - this.d) < (o.spec.length + RIDER_LEN) / 2 * 0.85;
+      if (!overlapD) continue;
+      const overlapX = Math.abs(o.x - this.x) < (o.spec.width + RIDER_W) / 2 * 0.8;
+      if (!overlapX) continue;
+      if (this.y > o.spec.clearHeight) continue;
+      o.hit = true;
+      if (this.boostTime > 0) {
+        // boosting riders bulldoze through
+        const p = this.pose(this.d);
+        const side = (Math.random() - 0.5) * 8;
+        o.fling = new THREE.Vector3(p.tx * 12 + p.nx * side, 6, p.tz * 12 + p.nz * side);
+        this.shake = 0.3;
+        sfx.bump();
+      } else if (this.shield > 0) {
+        // just got back up after a helmet save: brush past
+        this.slowTimer = Math.max(this.slowTimer, 0.6);
+        sfx.bump();
+      } else if (o.spec.hazard || this.route.kind === 'explore') {
+        // explore rides never end in a crash, they just slow you down
+        this.slowTimer = 1.2;
+        this.shake = 0.35;
+        sfx.bump();
+      } else if (this.helmets > 0) {
+        // the helmet takes the hit: wobble, slow down, ride on
+        this.helmets--;
+        this.shield = 2.5;
+        this.slowTimer = 2;
+        this.speed *= 0.35;
+        this.shake = 0.6;
+        sfx.crash();
+        this.onHelmet(this.helmets);
+      } else if (this.repairKits > 0) {
+        // a repair kit: a short stop to fix the bike, then ride on
+        this.repairKits--;
+        this.repairT = REPAIR_TIME;
+        this.boostTime = 0;
+        this.shake = 0.6;
+        sfx.crash();
+        this.onRepair(this.repairKits);
+      } else {
+        this.phase = 'crashed';
+        this.endTimer = 1.3;
+        this.shake = 0.6;
+        sfx.crash();
+      }
+      break;
+    }
+    // near misses: past something solid with very little room to spare
+    for (const o of this.obstacles) {
+      if (o.passed || o.hit || o.fling || this.d - o.d < (o.spec.length + RIDER_LEN) / 2) continue;
+      o.passed = true;
+      if (o.spec.hazard || this.shield > 0 || this.repairT > 0 || this.phase !== 'riding') continue;
+      const room = Math.abs(o.x - this.x) - (o.spec.width + RIDER_W) / 2 * 0.8;
+      if (room >= 0 && room < 0.7 && this.d - o.d < 12) {
+        this.coins += NEAR_MISS_COINS;
+        sfx.coin();
+        if (o.cruise && Math.random() < 0.5) this.honk(o);
+        this.onNearMiss();
+      }
+    }
+    for (const c of this.coinList) {
+      if (c.taken) continue;
+      if (Math.abs(c.d - this.d) < 1.1 && Math.abs(c.x - this.x) < 0.9 && Math.abs(c.y - (this.y + 0.9)) < 1.0) {
+        c.taken = true;
+        this.coins++;
+        this.boost = Math.min(1, this.boost + 0.06);
+        sfx.coin();
+      }
+    }
+    for (const t of this.treasures) {
+      if (t.taken || Math.abs(t.d - this.d) > 1.4 || Math.abs(t.x - this.x) > 1.0 || this.y > 1.8) continue;
+      t.taken = true;
+      this.treasureFound++;
+      sfx.coin();
+      setTimeout(() => sfx.coin(), 120);
+      this.onTreasure(this.treasureFound);
+    }
+    for (const f of this.features) {
+      if (f.kind !== 'puddle' || f.done || this.y > 0.1 || Math.abs(f.d - this.d) > f.len / 2 || Math.abs(f.x - this.x) > f.w / 2) continue;
+      f.done = true;
+      this.puddleT = 0.8;
+      // wet roads: the back wheel steps out a little
+      if (this.weather === 'rain') this.vx += (Math.random() < 0.5 ? -1 : 1) * (1.5 + Math.random() * 1.5) / this.grip;
+    }
+  }
+
+  private updateDynamic(dt: number) {
+    const behind = this.d - 15;
+    this.obstacles = this.obstacles.filter((o) => {
+      if (o.fling) {
+        o.mesh.position.addScaledVector(o.fling, dt);
+        o.fling.y -= GRAVITY * dt;
+        o.mesh.rotation.x += dt * 6;
+      }
+      if (o.d < behind || o.mesh.position.y < -10) {
+        this.dynamic.remove(o.mesh);
+        return false;
+      }
+      return true;
+    });
+    this.coinList = this.coinList.filter((c) => {
+      c.mesh.rotation.y += dt * 3.5;
+      if (c.taken) {
+        c.t += dt;
+        const p = this.pose(this.d, this.x);
+        c.mesh.position.set(p.x, this.y + layerHeight(p.x, p.z, p.tx, p.tz) + 1.2 + c.t * 6, p.z);
+        c.mesh.scale.setScalar(Math.max(0.01, 1 - c.t * 4));
+      }
+      if (c.d < behind || c.t > 0.25) {
+        this.dynamic.remove(c.mesh);
+        return false;
+      }
+      return true;
+    });
+    this.features = this.features.filter((f) => {
+      if (f.d + f.len > behind) return true;
+      this.dynamic.remove(f.mesh);
+      return false;
+    });
+    this.treasures = this.treasures.filter((t) => {
+      t.mesh.rotation.y += dt * 2.2;
+      if (t.taken) {
+        t.t += dt;
+        t.mesh.position.y += dt * 5;
+        t.mesh.scale.setScalar(Math.max(0.01, 1 + t.t * 2 - t.t * t.t * 8));
+      } else if (Math.abs(t.d - this.d) < 120) t.mesh.position.y = groundHeight(t.mesh.position.x, t.mesh.position.z) + 1.0 + Math.sin(this.time * 3 + t.d) * 0.12;
+      if (t.d < behind || t.t > 0.5) {
+        this.dynamic.remove(t.mesh);
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // ---------- rider + camera ----------
+
+  private animateRider(dt: number, speed: number) {
+    const r = this.rider;
+    this.place(r.root, this.d, this.x, this.y);
+    // the bike tips with the grade under its wheels (the ground at the front and back wheel), eased so a change of grade
+    // does not jerk it; in the air it keeps the last grade
+    if (this.y <= 0) this.slope += (slopePitch(r.root.position.x, r.root.position.z, r.root.rotation.y) - this.slope) * Math.min(1, dt * 8);
+    r.root.rotation.order = 'YXZ'; r.root.rotation.x = this.slope;
+    const wheelSpin = (speed / 0.38) * dt;
+    for (const w of r.wheels) w.rotation.x -= wheelSpin;
+    r.crank.rotation.x = -this.crank;
+    r.legs[0].rotation.x = Math.sin(this.crank) * 0.55;
+    r.legs[1].rotation.x = Math.sin(this.crank + Math.PI) * 0.55;
+    if (this.phase === 'crashed') {
+      r.body.rotation.z = Math.min(r.body.rotation.z + dt * 4, 1.4);
+      r.body.position.y = Math.max(-0.2, r.body.position.y - dt);
+    } else if (this.repairT > 0) {
+      // down on the road, fix the bike, back up
+      const t = REPAIR_TIME - this.repairT;
+      const down = Math.min(1, t / 0.4, this.repairT / 0.5);
+      r.body.rotation.z = down * 1.1;
+      r.body.position.y = -down * 0.12;
+    } else if (this.shield > 1.6) {
+      r.body.rotation.z = Math.sin(this.shield * 22) * 0.35;
+      r.body.position.y = 0;
+    } else {
+      r.body.rotation.z = this.lean;
+      r.body.position.y = 0;
+      // nose up off a ramp lip, level again on the way down
+      const pitch = this.y > 0 ? Math.max(-0.3, Math.min(0.1, -this.vy * 0.03 - 0.08)) : 0;
+      r.body.rotation.x += (pitch - r.body.rotation.x) * Math.min(1, dt * 10);
+    }
+  }
+
+  private render(dt: number) {
+    const cam = this.camera;
+    if (this.photo) {
+      // photo mode: orbit the frozen rider
+      const c = this.rider.root.position;
+      const r = 4.4, a = this.photoYaw, e = this.photoPitch;
+      cam.position.set(c.x + Math.sin(a) * Math.cos(e) * r, c.y + 0.9 + Math.sin(e) * r, c.z + Math.cos(a) * Math.cos(e) * r);
+      cam.lookAt(c.x, c.y + 0.9, c.z);
+      cam.fov = innerWidth < innerHeight ? 64 : 50;
+      cam.updateProjectionMatrix();
+    } else if (this.phase === 'cinematic') {
+      cam.position.copy(this.cine.pos);
+      cam.lookAt(this.cine.look);
+    } else if (this.drone && this.phase !== 'showcase') {
+      // drone view: circle the place 95 m out and 60 m up, looking down at it
+      const dr = this.drone;
+      if (!this.reducedMotion) dr.a += dt * 0.09;
+      const gy = groundHeight(dr.x, dr.z);
+      this.camTarget.set(dr.x + Math.sin(dr.a) * 95, gy + 60, dr.z + Math.cos(dr.a) * 95);
+      cam.position.lerp(this.camTarget, Math.min(1, dt * 1.2));
+      cam.lookAt(dr.x, gy + 4, dr.z);
+      const fov = innerWidth < innerHeight ? 66 : 52;
+      cam.fov += (fov - cam.fov) * Math.min(1, dt * 3);
+      cam.updateProjectionMatrix();
+    } else if (this.free && this.camView === FLY_OVER) {
+      this.flyOver(dt, -Math.sin(this.free.yaw), -Math.cos(this.free.yaw));
+    } else if (this.free) {
+      // free ride: the chase camera sits behind the bike wherever it heads
+      const f = this.free, fx = -Math.sin(f.yaw), fz = -Math.cos(f.yaw);
+      const gy = groundFrom(f.x, f.z, f.y), bx = f.x - fx * 6.4, bz = f.z - fz * 6.4;
+      this.camTarget.set(bx, Math.max(groundFrom(bx, bz, gy), gy) + 3.2, bz);
+      this.updateLook(dt);
+      this.lookAt.set(f.x + fx * 10, groundFrom(f.x + fx * 10, f.z + fz * 10, gy) + 1.1, f.z + fz * 10);
+      this.applyLook(this.camTarget, this.lookAt, this.rider.root.position);
+      this.clearCamera(this.camTarget);
+      cam.position.lerp(this.camTarget, Math.min(1, dt * 5));
+      if (this.shake > 0 && !this.reducedMotion) {
+        cam.position.x += (Math.random() - 0.5) * this.shake;
+        cam.position.y += (Math.random() - 0.5) * this.shake;
+        this.shake = Math.max(0, this.shake - dt);
+      }
+      cam.lookAt(this.lookAt);
+      const fov = (innerWidth < innerHeight ? 72 : 60) + f.v * 0.25;
+      cam.fov += (fov - cam.fov) * Math.min(1, dt * 4);
+      cam.updateProjectionMatrix();
+    } else if (this.camView === FLY_OVER && this.phase !== 'showcase') {
+      // a guided ride or a race seen from above: the heading along the route
+      const p0 = this.pose(this.d), p1 = this.pose(this.d + 6), L = Math.hypot(p1.x - p0.x, p1.z - p0.z) || 1;
+      this.flyOver(dt, (p1.x - p0.x) / L, (p1.z - p0.z) / L);
+    } else if (this.phase === 'showcase' && this.bikeView) {
+      this.garageCamera(this.bikeView, dt);
+    } else if (this.phase === 'showcase') {
+      const a = this.orbit;
+      const p = this.pose(this.d);
+      const r = this.dressing ? 3.3 : 5.5;
+      const gy = groundHeight(p.x, p.z);
+      cam.position.set(p.x + Math.sin(a) * r, gy + (this.dressing ? 1.7 : 2.1), p.z + Math.cos(a) * r);
+      cam.lookAt(p.x, gy + (this.dressing ? -0.15 : 0.9), p.z);
+    } else {
+      const boosting = this.boostTime > 0;
+      const [vBack, vUp] = VEHICLE_CAM[this.vehicle];
+      let back = (boosting ? 7.2 : 6.2) + vBack;
+      let behind = this.pose(this.d - back, this.x * 0.6);
+      // never inside a building: leaving a destination, the way behind the rider runs back to the door, so the
+      // camera comes in closer and higher until it is clear of every wall
+      let lift = 0;
+      while (back > 1.6 && buildingNear(behind.x, behind.z, 1.2)) {
+        back -= 0.8; lift += 0.45;
+        behind = this.pose(this.d - back, this.x * 0.6);
+      }
+      // a door right on the road (or a gateway): look on from one side instead
+      if (buildingNear(behind.x, behind.z, 0.3)) {
+        for (const [db, side] of [[3, 5], [3, -5], [-2, 7], [-2, -7]]) {
+          const c = this.pose(this.d - db, side);
+          if (!buildingNear(c.x, c.z, 0.3)) { behind = c; lift = 1.5; break; }
+        }
+      }
+      // the camera follows the ground (a hollow such as the engineering school's), never below the rider's
+      const gRide = this.rider.root.position.y - this.y;
+      this.camTarget.set(behind.x, Math.max(layerHeight(behind.x, behind.z, behind.tx, behind.tz), gRide) + 3.1 + vUp + lift + this.y * 0.4 + this.guideLook * 1.4, behind.z);
+      // the rider's own look (a controller's right stick, look behind) and camera view
+      this.updateLook(dt);
+      const ahead0 = this.pose(this.d + 12, this.x * 0.8);
+      this.lookAt.set(ahead0.x, layerHeight(ahead0.x, ahead0.z, ahead0.tx, ahead0.tz) + 1.1, ahead0.z);
+      const looking = Math.abs(this.lookYaw) > 1e-3 || Math.abs(this.lookPitch) > 1e-3 || this.camView !== 0;
+      if (looking) { this.applyLook(this.camTarget, this.lookAt, this.rider.root.position); this.clearCamera(this.camTarget); }
+      // a new ride starts with the camera already behind the rider, not sweeping in from where it was
+      if (this.snapCam) { cam.position.copy(this.camTarget); this.snapCam = false; }
+      cam.position.lerp(this.camTarget, Math.min(1, dt * 8));
+      if (this.shake > 0 && !this.reducedMotion) {
+        cam.position.x += (Math.random() - 0.5) * this.shake;
+        cam.position.y += (Math.random() - 0.5) * this.shake;
+        this.shake = Math.max(0, this.shake - dt);
+      }
+      const ahead = this.pose(this.d + 12, this.x * 0.8);
+      // guided ride: stopped at a place, the camera rises a little and turns to look at it
+      const stop = this.tour?.stops[this.guideIdx];
+      this.guideLook += ((this.guideWait ? 1 : 0) - this.guideLook) * Math.min(1, dt * 1.6);
+      if (looking) cam.lookAt(this.lookAt);
+      else if (stop && this.guideLook > 0.001) {
+        const k = this.guideLook * 0.75;
+        cam.lookAt(ahead.x + (stop.x - ahead.x) * k, layerHeight(ahead.x, ahead.z, ahead.tx, ahead.tz) + 1.1 + 2.5 * k, ahead.z + (stop.z - ahead.z) * k);
+      } else cam.lookAt(ahead.x, layerHeight(ahead.x, ahead.z, ahead.tx, ahead.tz) + 1.1, ahead.z);
+      // the camera banks a little with the bike
+      if (!this.reducedMotion) cam.rotateZ(this.lean * 0.18);
+      const fovBase = innerWidth < innerHeight ? 72 : 60;
+      const fov = this.reducedMotion ? fovBase + 3 : fovBase + (boosting ? 10 : 0) + this.speed * 0.15;
+      cam.fov += (fov - cam.fov) * Math.min(1, dt * 4);
+      cam.updateProjectionMatrix();
+    }
+    // (the sun's cascaded shadows follow the camera by themselves)
+    this.wfx?.update(dt, cam);
+    this.tufts.update(cam.position.x, cam.position.z);
+    this.draw(cam);
+  }
+
+  /** streams the campus round the camera, turns the labels to it and asks PlayCanvas for this frame */
+  private draw(cam: THREE.PerspectiveCamera) {
+    this.campus.update(cam.position.x, cam.position.z);
+    THREE.Sprite.face(this.engine.camera);
+    this.engine.app.renderNextFrame = true;
+  }
+  private camTarget = new THREE.Vector3();
+  private lookAt = new THREE.Vector3();
+
+  /** the Garage camera: frames the bike inside the page's box, turning slowly unless the rider is dragging it */
+  private garageCamera(v: BikeView, dt: number) {
+    const cam = this.camera;
+    const W = innerWidth, H = innerHeight;
+    const r = v.rect ?? { x: 0, y: 0, w: W, h: H };
+    const fov = W < H ? 50 : 40;
+    if (cam.fov !== fov) cam.fov = fov;
+    // the bike's centre sits in the middle of the box
+    cam.setViewOffset(W, H, W / 2 - (r.x + r.w / 2), H / 2 - (r.y + r.h / 2), W, H);
+    const t = Math.tan(((fov / 2) * Math.PI) / 180);
+    const size = v.rider === false ? 1.75 : 2.1;
+    const dist = Math.max(size / (1.5 * (r.h / H) * t), size / (1.7 * (r.w / W) * t * cam.aspect)) * (v.zoom ?? 1);
+    v.yaw ??= Math.PI * 0.62;
+    if (v.spin && !this.reducedMotion) v.yaw += dt * 0.22;
+    const a = this.rider.root.rotation.y + v.yaw;
+    const e = v.pitch ?? 0.12;
+    const c = this.rider.root.position;
+    const cy = c.y + (v.rider === false ? 0.55 : 0.8);
+    cam.position.set(c.x + Math.sin(a) * Math.cos(e) * dist, cy + Math.sin(e) * dist, c.z + Math.cos(a) * Math.cos(e) * dist);
+    cam.lookAt(c.x, cy, c.z);
+    cam.updateProjectionMatrix();
+  }
+}
+
+/** where the Garage camera looks from (see Game.viewBike) */
+export interface BikeView {
+  rect?: { x: number; y: number; w: number; h: number };
+  yaw?: number;
+  pitch?: number;
+  zoom?: number;
+  /** keep turning slowly */
+  spin?: boolean;
+  /** false shows the bike without the rider */
+  rider?: boolean;
+}
