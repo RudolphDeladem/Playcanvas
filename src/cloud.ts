@@ -4,7 +4,7 @@
 // Tables and rules live in supabase/schema.sql.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { newGarage, newGear, normalizeProfile, type Gear, type GarageSave, type Profile } from './state';
-import { SUPABASE_KEY, SUPABASE_REF, SUPABASE_URL, weekStart } from './cloud-config';
+import { ACCOUNTS, SUPABASE_KEY, SUPABASE_REF, SUPABASE_URL, weekStart } from './cloud-config';
 
 const AUTH_KEY = `sb-${SUPABASE_REF}-auth-token`;
 const OUTBOX_KEY = 'legonrush.outbox.v1';
@@ -36,6 +36,7 @@ const hasStoredSession = () => {
 
 /** Restores a saved sign-in (or one arriving from an email link) without loading the library for guests. */
 export async function restore(onChange: () => void) {
+  if (!ACCOUNTS) return;
   const fromEmail = /access_token=|type=(signup|recovery|magiclink)/.test(location.hash);
   if (!hasStoredSession() && !fromEmail) return;
   try {
@@ -72,6 +73,7 @@ function friendly(message: string) {
 export type AuthResult = { ok: true } | { ok: false; error: string } | { ok: 'confirm' };
 
 export async function signIn(email: string, password: string): Promise<AuthResult> {
+  if (!ACCOUNTS) return { ok: false, error: 'Accounts are switched off in this version.' } as AuthResult;
   try {
     const { data, error } = await (await sb()).auth.signInWithPassword({ email, password });
     if (error) return { ok: false, error: friendly(error.message) };
@@ -83,6 +85,7 @@ export async function signIn(email: string, password: string): Promise<AuthResul
 }
 
 export async function signUp(email: string, password: string): Promise<AuthResult> {
+  if (!ACCOUNTS) return { ok: false, error: 'Accounts are switched off in this version.' } as AuthResult;
   try {
     const { data, error } = await (await sb()).auth.signUp({ email, password, options: { emailRedirectTo: `${location.origin}${import.meta.env.BASE_URL}play/` } });
     if (error) return { ok: false, error: friendly(error.message) };

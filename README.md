@@ -23,6 +23,13 @@ The converted campus is in `public/campus/` (about 120 MB: tiles, textures, coll
 files. A static host serving `dist/` is all that is needed; the `.lrz` files are gzip streams the game inflates itself,
 so no server configuration is required.
 
+## Testing deployment
+
+Every push to `main` builds the game and publishes it on GitHub Pages (`.github/workflows/pages.yml`), under the
+repository's name as base path: `https://<owner>.github.io/<repo>/play/`. Accounts (sign in, sign up, cloud saves) are
+switched off in this build (`ACCOUNTS` in `src/cloud-config.ts`; `VITE_ACCOUNTS=on` turns them back on): everyone rides
+as a guest and progress stays on the device.
+
 ## Rebuild the campus from the original
 
 The campus is converted from the original game's own code. With the original checked out next to this project

@@ -7,6 +7,10 @@ export const SUPABASE_URL = `https://${SUPABASE_REF}.supabase.co`;
 /** publishable key: safe in the browser, the database rules decide what it can do */
 export const SUPABASE_KEY: string = import.meta.env.VITE_SUPABASE_KEY || 'sb_publishable_60xgi51nmCnfK6-kCJSXgQ_Bq3rzVb7';
 
+/** accounts (sign in, sign up, cloud saves): off in this build (the owner, 2026-10-18: "remove any sign in for the game
+ *  for now"); everyone rides as a guest and progress stays on the device. VITE_ACCOUNTS=on in .env.local turns them on. */
+export const ACCOUNTS = import.meta.env.VITE_ACCOUNTS === 'on';
+
 /** midnight at the start of this Monday, local time: when Hall Week resets */
 export function weekStart(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));

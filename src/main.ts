@@ -1,3 +1,4 @@
+import { ACCOUNTS } from './cloud-config';
 import '@fontsource/sora/400.css';
 import '@fontsource/sora/600.css';
 import '@fontsource/sora/700.css';
@@ -249,7 +250,7 @@ function intro(i = 0, enter: Enter = 'fade') {
         <div class="intro-dots">${INTRO.map((_, j) => `<button class="${j === i ? 'on' : ''}" data-dot="${j}" aria-label="Screen ${j + 1} of ${INTRO.length}"></button>`).join('')}</div>
         <div class="intro-actions">
           <button class="btn btn-primary" id="${last ? 'guest' : 'next'}">${last ? `Let's ride ${icons.arrow}` : 'Next'}</button>
-          ${last ? '<button class="btn btn-link" id="signIn">I already have an account</button>' : ''}
+          ${last && ACCOUNTS ? '<button class="btn btn-link" id="signIn">I already have an account</button>' : ''}
         </div>
       </div>
     </div>`, enter);
@@ -305,9 +306,9 @@ function welcome() {
         <div class="big">Your campus.<br>Your <em>ride.</em></div>
         <p class="lede">Ride the real Legon campus, race your friends, explore every hall and meet new people on the way.</p>
         <div class="actions">
-          <button class="btn btn-primary" id="start">Get Started</button>
+          ${ACCOUNTS ? `<button class="btn btn-primary" id="start">Get Started</button>
           <button class="btn btn-ghost" id="signIn">I already have an account</button>
-          <button class="btn btn-link" id="guest">Just ride as a guest</button>
+          <button class="btn btn-link" id="guest">Just ride as a guest</button>` : '<button class="btn btn-primary" id="guest">Let\'s ride</button>'}
         </div>
       </div>
     </div>`);
@@ -352,6 +353,7 @@ const RIDER_TYPES: [RiderType, string, string, string][] = [
 const STATUSES: [StudentStatus, string, string][] = [['student', icons.grad, 'UG Student'], ['alumni', icons.pillars, 'Alumni'], ['staff', icons.briefcase, 'Staff'], ['visitor', icons.hand, 'Visitor / Guest']];
 
 function onboard(s: Signup = newSignup(), enter: Enter = 'fade'): void {
+  if (!ACCOUNTS && s.flow === 'signup') { if (!profile) firstRide(); else home('you'); return; }
   const d = s.draft;
   const A = d.about;
   const order = s.flow === 'signup' ? SIGNUP_STEPS : PROFILE_STEPS;
@@ -2068,7 +2070,7 @@ function results(r: RideResult, rw: RideRewards, route: Route, x: ResultExtras) 
   const headline = r.finished ? (explore ? 'You made it' : 'Finish!') : 'Wiped out';
   const again = () => (x.opts.challengeRide ? (x.opts.challengeRide.next?.run ?? (() => play(false, route, x.opts)))() : x.opts.live ? quickMatch() : play(false, route, x.opts.rivals ? { ...x.opts, rivals: botRivals(route, 3, settings.difficulty ?? 'normal') } : x.opts));
   // a guest has just had their first taste: now is the moment to save it
-  const invite = p.guest && !x.opts.live;
+  const invite = ACCOUNTS && p.guest && !x.opts.live;
   const step = nextStep(r, rw, route, x, again);
   render(`
     <div class="screen scrim fade-in results">
@@ -2529,7 +2531,7 @@ function home(next: Tab = 'home') {
             ${p.snap ? `<p class="muted small">${icons.ghost} @${esc(p.snap)}${p.snapPublic ? '' : ' · hidden'}</p>` : ''}
           </div>
         </div>
-        ${p.guest ? `<div class="card stack complete-card">
+        ${p.guest && !ACCOUNTS ? '' : p.guest ? `<div class="card stack complete-card">
             <div class="row"><span class="gear-ico">${icons.user}</span><span class="grow"><b>Save your progress</b><span class="muted small">Create your account to keep your coins, pick your hall and race your friends.</span></span></div>
             <button class="btn btn-primary" id="createAcct">Create my account</button>
           </div>` : completeCard(p)}
@@ -2549,14 +2551,14 @@ function home(next: Tab = 'home') {
         ${passportCardHtml()}
         ${money.youMoneyHtml()}
         <button class="card selectable row" id="garage"><span class="hall-swatch" style="background:${bikeById(p.bike).color}"></span><span class="muted small">Bike</span><b>${bikeById(p.bike).name}</b><span class="grow"></span><span class="small">Garage ${icons.arrow}</span></button>
-        <div class="two"><button class="btn btn-ghost" id="dress">Dress rider</button><button class="btn btn-ghost" id="edit">${p.guest ? 'Create account' : 'Edit details'}</button></div>
+        <div class="two"><button class="btn btn-ghost" id="dress">Dress rider</button><button class="btn btn-ghost" id="edit">${p.guest ? (ACCOUNTS ? 'Create account' : 'Edit rider') : 'Edit details'}</button></div>
         <div class="two"><button class="btn btn-ghost" id="settings">Settings</button><button class="btn btn-ghost" id="privacy">Privacy &amp; safety</button></div>
         ${installPrompt ? '<button class="btn btn-ghost" id="install">Install app</button>' : ''}
         ${cloud.account
           ? `<div class="card stack" style="gap:8px"><div class="row"><b>Account</b><span class="grow"></span><span class="badge gold">Synced</span></div><p class="muted small">Signed in as ${esc(cloud.account.email)}. Your progress is saved to your account and follows you to any device.</p><button class="btn btn-ghost" id="signOut">Sign out</button></div>`
-          : `<div class="card stack" style="gap:8px"><b>Save your progress online</b><p class="muted small">Sign in to keep your progress on any device, post your race times and ride for your hall.</p><button class="btn btn-primary" id="signIn">Sign in or create an account</button></div>
+          : `${ACCOUNTS ? '<div class="card stack" style="gap:8px"><b>Save your progress online</b><p class="muted small">Sign in to keep your progress on any device, post your race times and ride for your hall.</p><button class="btn btn-primary" id="signIn">Sign in or create an account</button></div>' : ''}
         <button class="btn btn-link" id="reset">Reset progress</button>
-        <p class="muted small">Progress is saved on this device until you sign in.</p>`}
+        <p class="muted small">${ACCOUNTS ? 'Progress is saved on this device until you sign in.' : 'Progress is saved on this device.'}</p>`}
       </div>`,
   };
 
@@ -2644,7 +2646,7 @@ function home(next: Tab = 'home') {
   // back from another tab goes to Home; from Home it leaves the app
   onBack(tab === 'home' ? null : () => home());
   on('#quizBtn', 'click', () => whereIsIt());
-  on('#edit', 'click', () => (p.guest ? onboard() : createRider({ ...p, look: structuredClone(p.look) }, true)));
+  on('#edit', 'click', () => (p.guest && ACCOUNTS ? onboard() : createRider({ ...p, look: structuredClone(p.look) }, true)));
   on('#createAcct', 'click', () => onboard());
   on('#completeProfile', 'click', () => onboard({ draft: structuredClone(p), email: '', pass: '', step: 0, flow: 'complete' }));
   on('#dress', 'click', () => dressRider({ ...p, look: structuredClone(p.look) }, true));
@@ -3713,6 +3715,8 @@ async function syncDown() {
 type AuthMode = 'in' | 'up' | 'reset' | 'newpass';
 
 function authScreen(mode: AuthMode, back: () => void) {
+  // (accounts off: no sign-in screen; whatever asked for one goes back where it was)
+  if (!ACCOUNTS) return back();
   const titles: Record<AuthMode, string> = { in: 'Sign in', up: 'Create account', reset: 'Reset password', newpass: 'New password' };
   const go: Record<AuthMode, string> = { in: 'Sign in', up: 'Create account', reset: 'Send reset link', newpass: 'Save password' };
   render(`
@@ -3810,7 +3814,7 @@ function boardScreen(view: string, back: () => void) {
       const mine = profile?.bestTimes[view];
       box.innerHTML = rows.length
         ? rows.map((r, i) => `<div class="board-row${r.me ? ' me' : ''}"><span class="rank">${i + 1}</span><span class="hall-swatch" style="background:${hallById(r.hall).color}"></span><span class="grow">${esc(r.name)}<small>${r.username ? `@${esc(r.username)} · ` : ''}${esc(hallById(r.hall).short)}${r.snap ? ` · 👻 ${esc(r.snap)}` : ''}</small></span><b>${clock(r.best)}</b></div>`).join('')
-          + (mine && !rows.some((r) => r.me) ? `<p class="muted small" style="margin-top:8px">Your best: ${clock(mine)}${cloud.account ? '' : ' (sign in to post it)'}</p>` : '')
+          + (mine && !rows.some((r) => r.me) ? `<p class="muted small" style="margin-top:8px">Your best: ${clock(mine)}${cloud.account || !ACCOUNTS ? '' : ' (sign in to post it)'}</p>` : '')
         : `<p class="muted small">No times yet. Finish this race to be the first.</p>`;
     }, fail);
   }
@@ -4326,6 +4330,7 @@ addEventListener('offline', () => {
 addEventListener('online', () => {
   if (app.querySelector('.shell')) home(tab);
 });
+if (!ACCOUNTS) document.documentElement.classList.add('no-accounts');
 splash();
 cloud.restore(() => {
   if (cloud.account) void syncDown();

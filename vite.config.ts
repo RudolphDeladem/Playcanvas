@@ -34,7 +34,7 @@ export default defineConfig({
         navigateFallback: null,
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         runtimeCaching: [
-          { urlPattern: /\/campus\/.*\.(json|gz|webp)$/, handler: 'CacheFirst', options: { cacheName: 'legonrush-campus', expiration: { maxEntries: 4000 } } },
+          { urlPattern: /\/campus\/.*\.(json|lrz|webp)$/, handler: 'CacheFirst', options: { cacheName: 'legonrush-campus', expiration: { maxEntries: 4000 } } },
         ],
       },
     }),

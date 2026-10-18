@@ -489,3 +489,10 @@ i.desk-only { font-style: normal; }
 .vx-ride-acts button .i { width: 16px; height: 16px; }
 .vx-ride-acts button.on { background: #f5c518; color: #0b1530; }
 .vx-ride-acts #vxEnd { margin-left: auto; background: rgba(200,40,60,0.85); }
+
+/* accounts switched off (cloud-config.ts ACCOUNTS): no sign-in buttons or sign-in cards anywhere */
+.no-accounts #signIn,
+.no-accounts [data-cm-signin],
+.no-accounts [data-mn-signin],
+.no-accounts .cm-signin,
+.no-accounts .mn-signin { display: none !important; }
