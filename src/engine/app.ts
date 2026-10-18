@@ -37,7 +37,8 @@ export function createEngine(canvas: HTMLCanvasElement, opts: { preserveDrawingB
   });
   app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
-  app.graphicsDevice.maxPixelRatio = Math.min(devicePixelRatio, lowEnd ? 1 : 1.5);
+  // (as the original: up to 1.5 device pixels per CSS pixel; the low graphics setting drops it to 1)
+  app.graphicsDevice.maxPixelRatio = Math.min(devicePixelRatio, 1.5);
   addEventListener('resize', () => app.resizeCanvas());
   canvas.addEventListener('webglcontextlost', () => console.warn('LEGONRUSH: WebGL context lost (GPU reset or driver timeout)'));
 
