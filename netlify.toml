@@ -1,0 +1,21 @@
+# Testing deployment of the PlayCanvas recreation (a separate Netlify site; the original game's site is not touched).
+[build]
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # (Playwright is only for the local checks: no browser download on the build machine)
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+
+# the converted campus never changes within a deploy: cached by the browser for a day
+[[headers]]
+  for = "/campus/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+# a test build: kept out of search engines
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex"
