@@ -66,26 +66,33 @@ reference"). Each road is drawn at the map's width for its class, the same width
 lines, junction rounding and the centre dashes are unchanged. The walkers beside the route are back at their original
 offset.
 
-## 3. Sidewalks
+## 3. Sidewalks, kerbs, gutters and verges
 
-**Before:** a lip, gutter, white kerb and paver sidewalk along both sides of all 3,562 main-road segments (7,124
-sides), except hall entrances, earth roads, car parks and buildings.
+The owner's corrections of 2026-10-19 came in three steps:
 
-**Now:** a sidewalk only on a side the map shows one, **140 sides**:
+1. Pictures of the median of Dr. J.B. Danquah Avenue and of University Square, with "remove that from the entire
+   game" (the concrete lip and open gutter beside the road) and "sidewalks should not cross roads" (a paved slab
+   bridging a road junction).
+2. Their map of the main campus roads (the thick, named ones): "add the side walk to all main roads and also the
+   white stone that protect the side walk".
+3. "Grass separating grass from park, fix it."
 
-- 92 sides where OSM tags a sidewalk (`sidewalk=both/left/right`). Mostly University Avenue and the N4.
-- 48 sides where a mapped footway runs alongside the road, 0.5–6 m off its edge, along at least half the segment.
+What the game draws now:
 
-No sidewalk is drawn on:
+- **Main roads** (every named main road): the map's width of asphalt, then a raised white stone kerb at its edge,
+  then 2 m of grey herringbone paver sidewalk, then the lawn. No lip, gutter or drain anywhere.
+- **Where sidewalks stop:** a sidewalk stops where a side road or lane joins, so it never crosses one. Where a
+  footpath meets the road the kerb is flush.
+- **Medians:** a side facing the other carriageway of the same road gets no sidewalk. That keeps Dr. J.B. Danquah
+  Avenue's lawn median as Google's picture shows it, edged only by the original's thin kerb.
+- **No sidewalk:** on roads into halls (Pent, Evandy and the others), on unnamed and unpaved roads, inside car parks
+  and plazas, or through buildings.
+- **Car parks:** where a car park lies within 3.5 m of a main road, the ground between is asphalt, with no strip of
+  grass.
+- **Verges and drains:** the original's own concrete verges and open drains along the main roads
+  (`world.ts buildRoadEdges`) are tagged `verge` at conversion and never drawn.
 
-- 510 sides tagged `sidewalk=no`, or with the sidewalk mapped as a separate way (the campus already draws that
-  footway, so drawing another would duplicate it);
-- 328 sides facing a parallel carriageway (a median);
-- all remaining sides, which have no evidence.
-
-Evidence map: `docs/surfaces/sidewalk-evidence-map.png`. The owner said on 2026-10-18 that "almost all roads" have
-sidewalks, but the map shows few, so this map asks which roads have them. Code: `src/data/sidewalks.json` (from
-`tools/roads/sidewalks.mjs`) and `roadedges.ts` (`sidewalkSides`, `walkField`).
+Code: `roadedges.ts` (`sidewalkSides`, the bands, `nearPark`).
 
 ## 4. Ground surfaces
 
@@ -148,9 +155,26 @@ Corrections in this pass:
   Cars, posts and other instanced parts are no longer affected; before, cars on a corrected car park could vanish.
 - **Trees beside roads, in lawns and on the sites' planted islands stay** where the original placed them, from the
   owner's photos.
+- **Balme Library (the owner, 2026-10-19):** the tree groves either side of the forecourt, between the car parks,
+  and the tree rows along the lanes past the sunken square are replaced by low shrubs (`shrubs.ts`, three instanced
+  shapes). The trees there are left out by `vegrules.ts`: 127 parts (crowns, trunks and far shapes).
+- **Excess trees (the owner, 2026-10-19):** outside the mapped woods and groves, a tree over 3 m tall standing within
+  6 m of one already kept is left out, so no two crowns crowd into one. Street trees (22–34 m apart), bushes and
+  hedges are unaffected. In the test views this removes roughly a fifth to a third of the tall trees (for example 214
+  of about 1,000 round the Balme Library).
 - **Not done: evidence-based tree placement campus-wide.** The original's street trees are generated along the roads,
   22–34 m apart. No tree survey or high-resolution canopy layer is available to place them one by one. ESA WorldCover
   (10 m) is too coarse for single trees.
+
+## Aerial views for the owner's review
+
+`docs/aerials/01.jpg` … `30.jpg` and `docs/aerials/index.jpg`. Each view is straight down, north up, about
+424 m × 252 m, labelled with its number and game-frame centre, with a 50 m bar.
+
+- Views 1–24 are a 4 × 6 grid over the main campus (x −700…1000, z −500…900; row 1 is the north).
+- Views 25–30 are New Pent, Evandy, Bani, TF Hostel, UPSA and the N4 at the main gate.
+- `docs/aerials/views.json` holds the cameras. Shoot them again with `tools/shoot.mjs` and label them with
+  `tools/aerials.py`.
 
 ## Needs the owner's decision
 
@@ -163,12 +187,19 @@ above, the feature outlined, north up, with a scale.
 4. **340246934 and 340246848:** earth streets under an asphalt through road. Earth or asphalt?
 5. **634956633:** tagged earth, now drawn as concrete by the original. Which is it?
 6. **758602540:** tagged asphalt, now drawn as concrete by the original. Which is it?
-7. **Sidewalks** (`sidewalk-evidence-map.png`): which roads have sidewalks that the map doesn't show?
 
-Each answer goes into `classify.mjs` (`DECISIONS`, `SYNCED`) or `roadedges.ts` as an explicit correction.
+Each answer goes into `classify.mjs` (`DECISIONS`, `SYNCED`) as an explicit correction.
 
 Also unverified: 178 footpaths without a surface tag. They are left as the original draws them; the satellite
 picture is too coarse to tell paving from earth at 2 m.
+
+## Flicker on paved ground
+
+The original lays some paving 3–5 cm over the ground without a depth bias, the Balme Library's forecourt among them.
+The port lifted the original's depth-biased layers (paths, verges, car parks) by up to 6 cm to stop grass showing
+through them from above, and a lifted layer then fought that paving at its edges. The lifts are now a few millimetres
+a step, at most 1.6 cm, in the same order. The port's own corrected surfaces sit at 2.6–3.2 cm, so the original's
+paving wins where they meet. Before/after: `docs/surfaces/edges-trees-before-after.png`.
 
 ## Tests and build
 

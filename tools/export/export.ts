@@ -516,6 +516,9 @@ async function run() {
     if (m.material?.name === 'kenney-car') continue;
     if (m.lrPlant) m.material.userData.lrTag = 'plant';
     else if (m.isInstancedMesh && m.parent?.parent?.name === 'crowns') m.material.userData.lrTag = m.material.side === 2 ? 'tuft' : 'crown';
+    // (the roads' concrete verges and open drains, world.ts buildRoadEdges: its one vertex-coloured, mapped material
+    // with the -2.5/-5 bias; the owner had them removed, 2026-10-19)
+    else if (!m.isInstancedMesh && m.userData.shared && m.material?.vertexColors && m.material.map && m.material.polygonOffsetFactor === -2.5 && m.material.polygonOffsetUnits === -5) m.material.userData.lrTag = 'verge';
   }
   if (q.get('only') === 'passages') { await exportPassages(); (window as Any).__stats = { ms: Math.round(performance.now() - T0) }; (window as Any).__done = true; return; }
   if (q.get('only') === 'landmark') { await exportLandmark(); (window as Any).__stats = { ms: Math.round(performance.now() - T0) }; (window as Any).__done = true; return; }

@@ -26,8 +26,9 @@ export class Campus {
   readonly ready: Promise<void>;
   /** lift the ground layers apart (see build); false shows the campus as first converted, for comparisons */
   liftLayers = true;
-  /** trees and plants (instanced parts tagged 'crown' or 'plant') left out where this says so: on hard ground */
-  dropInstance?: (x: number, z: number) => boolean;
+  /** trees and plants (instanced parts tagged 'crown' or 'plant') left out where this says so (vegrules.ts): at their
+   *  foot (x, z), h metres tall */
+  dropInstance?: (x: number, z: number, h: number) => boolean;
   /** called with 0..1 while the first tiles round the start load */
   onProgress?: (p: number) => void;
   manifest!: Manifest;
@@ -289,6 +290,9 @@ export class Campus {
     const lodNodes: LoadedTile['lodNodes'] = [];
     let tris = 0;
     for (const h of heads) {
+      // (the original's concrete verges and open drains along the main roads are not drawn: the owner, 2026-10-19,
+      // "remove that from the entire game"; world.ts buildRoadEdges, tagged 'verge' by the converter)
+      if (this.manifest.materials[h.m]?.tag === 'verge') continue;
       let o = 0;
       const next = <T extends ArrayBufferView>(C: { new (b: ArrayBuffer, o: number, n: number): T; BYTES_PER_ELEMENT: number }, n: number) => { const v = new C(buf, base + h.o[o++], n); return v; };
       const mat = this.material(h.m);
@@ -324,7 +328,9 @@ export class Campus {
         // most of a bias by the surface's slope to the view, so seen from straight above (the fly-over, the drone, far
         // away) the grass came through the car parks and the plazas
         const po = this.manifest.materials[h.m]?.po;
-        const lift = po && this.liftLayers ? Math.min(0.06, Math.max(0, -po[1] * 0.005 - po[0] * 0.002)) : 0;
+        // (a few millimetres a step, at most 1.6 cm: the original lays its own paving 3-5 cm over the ground without a
+        // bias, the Balme Library's forecourt among them, and a layer lifted near it fought it, the owner, 2026-10-19)
+        const lift = po && this.liftLayers ? Math.min(0.016, Math.max(0, (-po[1] * 0.005 - po[0] * 0.002) / 3)) : 0;
         e.setLocalPosition(x0, y0 + lift, z0);
         e.setLocalScale(sx, sy, sz);
         const mi = new pc.MeshInstance(mesh, mat);
@@ -349,8 +355,11 @@ export class Campus {
         const groups = new Map<string, number[]>();
         // (the grass tufts are not drawn: the owner had them removed from the game, 2026-10-18)
         const tag = this.manifest.materials[h.m]?.tag as string | undefined, veg = tag === 'crown' || tag === 'plant', sh = tag === 'plant' ? 5 : 3;
+        // (a plant's height: its shape's top times the copy's vertical scale)
+        let top = 0;
+        if (veg) for (let v = 1; v < pos.length; v += 3) top = Math.max(top, pos[v]);
         for (let i = 0; i < h.n; i++) {
-          if (tag === 'tuft' || (veg && this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14]))) continue;
+          if (tag === 'tuft' || (veg && this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14], top * Math.hypot(mats[i * 16 + 4], mats[i * 16 + 5], mats[i * 16 + 6])))) continue;
           // (the plants' shades in coarser steps: fewer tinted copies, fewer draws)
           const k = `${icol[i * 4] >> sh},${icol[i * 4 + 1] >> sh},${icol[i * 4 + 2] >> sh}`;
           let l = groups.get(k); if (!l) groups.set(k, (l = [])); l.push(i);

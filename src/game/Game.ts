@@ -17,6 +17,7 @@ import { RoadEdges, edgeLift, onEdges } from './roadedges';
 import { SOLIDS } from './solids';
 import { Surfaces, onHardSurface } from './surfaces';
 import { vegetationBlocked } from './vegrules';
+import { buildBalmeShrubs } from './shrubs';
 import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
 import { AREAS, buildingAt, buildingNear, mapBounds, roadAt } from './campusmap';
 import { inPassage, solidAt } from './solids';
@@ -507,7 +508,7 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
     this.campus = new Campus(this.engine);
     // the campus's trees and plants on hard ground are left out (vegrules.ts), with their trunks' solids
-    this.campus.dropInstance = (x, z) => { const drop = vegetationBlocked(x, z); if (drop) clear(x, z); return drop; };
+    this.campus.dropInstance = (x, z, h) => { const drop = vegetationBlocked(x, z, h); if (drop) clear(x, z); return drop; };
     // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
     nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
 
@@ -517,6 +518,8 @@ export class Game {
     // the corrected ground surfaces: car parks, plazas, paver, earth and gravel paths (surfaces.ts)
     this.surfaces = new Surfaces();
     this.scene.add(this.surfaces.group);
+    // short shrubs where the Balme Library's tree groves were (shrubs.ts)
+    this.scene.add(buildBalmeShrubs());
     this.setRoute(CAMPUS_LOOP);
     this.scene.add(this.dynamic);
 
@@ -1574,7 +1577,7 @@ export class Game {
         // respawn: spread around at first, later far ahead where it can't pop into view
         const d = this.d + (spread ? -20 + Math.random() * 200 : 90 + Math.random() * 110);
         // (on the sidewalk: past the lip and the gutter, roadedges.ts)
-        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF + 0.4 + Math.random() * 1.0);
+        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF + 0.6 + Math.random() * 1.4);
         const p = this.pose(d, x);
         if (d >= end || d < -this.route.lead + 2 || buildingAt(p.x, p.z, 0.6) || this.track.distanceToRoad(p.x, p.z) < ROAD_HALF + 0.3) continue;
         Object.assign(w, { d, x, v: (Math.random() < 0.5 ? -1 : 1) * (1.1 + Math.random() * 0.5), lift: edgeLift(p.x, p.z) });

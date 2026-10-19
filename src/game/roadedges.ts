@@ -1,18 +1,19 @@
-// The roads' edges, as on the real campus (the owner's corrections, 2026-10-18, with photos of a campus road and its
-// sidewalk): smooth asphalt with rounded corners where roads meet and rounded joins where a road bends, at the map's
-// own width (the owner, 2026-10-19: "everything should use the map as reference"). A sidewalk only where the map shows
-// one (the owner, 2026-10-19: no invented sidewalks): on a side of a main road that OSM tags with a sidewalk, or along
-// which a mapped footway runs beside the road; never on a side tagged without one or with its sidewalk mapped as a way
-// of its own (the campus draws that footway), nor on the side facing a parallel carriageway. A sidewalk is a concrete
-// lip, an open gutter, a raised white stone kerb and grey concrete pavers in herringbone with a concrete edging. Roads
-// into halls (Pent, Evandy and the others) have none; where one of them or a service lane joins a main road the
-// sidewalk opens for it; where a footpath meets the road the gutter is bridged.
+// The main roads' edges, as on the real campus (the owner's corrections, 2026-10-18 and 10-19, with photos of a campus
+// road and its sidewalk and the map of the main campus roads, the thick ones): smooth asphalt at the map's own width
+// ("everything should use the map as reference") with rounded corners where roads meet and rounded joins where a road
+// bends; along both sides of every main campus road (the named main roads) a raised white stone kerb at the road's
+// edge and a sidewalk of grey concrete pavers in herringbone behind it, then the lawn. No gutter or drain ("remove that
+// from the entire game"). A sidewalk never crosses a road ("sidewalks should not cross roads"): it stops where a side
+// road or lane joins, and where a footpath meets the road the kerb is flush. None on the side facing a parallel
+// carriageway (the lawn median of Dr. J.B. Danquah Avenue), on roads into halls (Pent, Evandy and the others), or along
+// a car park's frontage, where the asphalt runs on to the car park with no grass between (the owner: "sometimes grass
+// separating grass from park, fix it").
 // Not drawn where a site models its own edges (ownsEdges), on the plain stretches of the NSIA Road and by the Kuffour
 // Quadrangle, on earth and brick roads, in the Legon Road cutting, on stairs, or through buildings and walls.
 //
 // How: the main roads make one distance field, each road its own capsule chain (the distance to its centre line less
 // its half width) and the roads combined with a smooth minimum, so that junctions get rounded corners. The field is
-// sampled on a 1 m grid a 64 m tile at a time and every band of it (asphalt below 0, lip, gutter, sidewalk) is cut out
+// sampled on a 1 m grid a 64 m tile at a time and every band of it (asphalt below 0, kerb, sidewalk) is cut out
 // of each grid cell exactly (the cell clipped by the field interpolated along its edges): smooth curves at any angle.
 // Cells wholly inside one band are merged into strips, and the raised bands get vertical faces along their outlines.
 // Tiles are built round the camera a few milliseconds a frame and dropped behind it.
@@ -25,19 +26,18 @@ import { asphaltTexture } from './textures';
 import { canvasTex, paverTexture, rnd } from './groundtex';
 import { excludedAll } from './groundrules';
 import { unpavedAt } from './surfaces';
-import sidewalkData from '../data/sidewalks.json';
 
 // ------------------------------------------------------------------------------------------------- the section
 /** across the road edge (m, from the asphalt's edge outward) and heights above the ground */
-const LIP = 0.18, GUTTER = 0.78, KERB = 0.96, WALK = 2.96;
-const H = { road: 0.07, lip: 0.15, gutter: 0.075, kerb: 0.26, walk: 0.2, edging: -0.05 };
+const KERB = 0.25, WALK = 2.25;
+const H = { road: 0.07, kerb: 0.2, walk: 0.12, edging: -0.05 };
 /** how round the corners where roads meet are (the smooth minimum's reach, m) */
 const ROUND = 4;
 const TILE = 64, CELL = 1, N = TILE / CELL;
 
 // ------------------------------------------------------------------------------------------------- the roads
 /** l, r: a sidewalk on the segment's left, right (seen from a toward b, x east, z south) */
-interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; l: boolean; r: boolean }
+interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; l: boolean; r: boolean; name?: string }
 const main: Seg[] = [], side: Seg[] = [], path: Seg[] = [];
 const GRID = 16, REACH = 12;
 const gkey = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
@@ -80,7 +80,7 @@ function prepare() {
     if (isMain[ri]) { const root = find(ri); g = gid.get(root) ?? gid.set(root, groups++).get(root)!; }
     for (let k = 0; k < r.nodes.length - 1; k++) {
       const a = r.nodes[k], b = r.nodes[k + 1];
-      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g, l: false, r: false };
+      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g, l: false, r: false, name: r.name };
       list.push(s);
       const grid = grids[list === main ? 0 : list === side ? 1 : 2];
       const x0 = Math.floor((Math.min(s.ax, s.bx) - REACH) / GRID), x1 = Math.floor((Math.max(s.ax, s.bx) + REACH) / GRID);
@@ -92,65 +92,34 @@ function prepare() {
 }
 
 // ------------------------------------------------------------------------------------------------- the sidewalks
-interface Tagged { l: boolean | null; r: boolean | null; pts: number[] }
-const TAGGED = (sidewalkData as { ways: Tagged[] }).ways;
-/** the main roads' segments with their sidewalk sides (the checks and the review map) */
-export function sidewalkSegments() { prepare(); return main.map((s) => ({ ax: s.ax, az: s.az, bx: s.bx, bz: s.bz, w: s.w, l: s.l, r: s.r })); }
-/** counts for the checks: segments with a sidewalk side and why */
-export const SIDEWALK_STATS = { segs: 0, sides: 0, tagYes: 0, tagNo: 0, footway: 0, median: 0 };
-/** which sides of a main road segment have a sidewalk, from the map's evidence only */
+/** counts for the checks */
+export const SIDEWALK_STATS = { segs: 0, sides: 0, median: 0 };
+/** which sides of a main road segment have a sidewalk: both, on a named main road (the owner's map of the main campus
+ *  roads), except a side facing a parallel carriageway close by (a dual carriageway's lawn median) */
 function sidewalkSides(s: Seg) {
   const dx = s.bx - s.ax, dz = s.bz - s.az, L = Math.hypot(dx, dz);
   SIDEWALK_STATS.segs++;
-  if (L < 0.5) return;
-  const ux = dx / L, uz = dz / L;
-  // left of a -> b: (p - a) . (uz, -ux) > 0 (x east, z south)
-  const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
-  // 1. the OSM tags of the way this segment lies on (left and right along the way's own direction)
-  let tag: { l: boolean | null; r: boolean | null } | null = null;
-  for (const t of TAGGED) {
-    for (let i = 0; i + 3 < t.pts.length; i += 2) {
-      const ax = t.pts[i], az = t.pts[i + 1], bx = t.pts[i + 2], bz = t.pts[i + 3], tx = bx - ax, tz = bz - az, tl = Math.hypot(tx, tz);
-      if (tl < 0.5 || Math.abs((tx * ux + tz * uz) / tl) < 0.9) continue;
-      const q = Math.max(0, Math.min(1, ((mx - ax) * tx + (mz - az) * tz) / (tl * tl)));
-      if (Math.hypot(mx - ax - tx * q, mz - az - tz * q) > 3) continue;
-      tag = tx * ux + tz * uz > 0 ? { l: t.l, r: t.r } : { l: t.r, r: t.l };
-      break;
-    }
-    if (tag) break;
-  }
+  if (L < 0.5 || s.name == null) return;
+  const ux = dx / L, uz = dz / L, mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
   for (const side of ['l', 'r'] as const) {
-    const t = tag?.[side];
-    if (t === true) { s[side] = true; SIDEWALK_STATS.tagYes++; SIDEWALK_STATS.sides++; continue; }
-    if (t === false) { SIDEWALK_STATS.tagNo++; continue; }
+    // (left of a -> b: (p - a) . (uz, -ux) > 0, x east, z south)
     const sg = side === 'l' ? 1 : -1, nx = uz * sg, nz = -ux * sg;
-    // 2. not toward a parallel main carriageway close by (a dual carriageway's median, a service road alongside)
     let median = false;
-    for (const o of grids[0].get(gkey(Math.floor(mx / GRID), Math.floor(mz / GRID))) ?? []) {
+    const near = new Set<Seg>();
+    for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) for (const o of grids[0].get(gkey(Math.floor(mx / GRID) + i, Math.floor(mz / GRID) + j)) ?? []) near.add(o);
+    for (const o of near) {
       if (o === s) continue;
       const ox = o.bx - o.ax, oz = o.bz - o.az, OL = Math.hypot(ox, oz);
       if (OL < 1 || Math.abs((ux * ox + uz * oz) / OL) < 0.9) continue;
       const q = ((mx - o.ax) * ox + (mz - o.az) * oz) / (OL * OL);
       if (q <= 0.02 || q >= 0.98) continue;
-      const px = o.ax + ox * q - mx, pz = o.az + oz * q - mz, off = px * nx + pz * nz;
-      if (off > 3 && off < s.w + o.w + 2 * WALK + 2) { median = true; break; }
+      const off = (o.ax + ox * q - mx) * nx + (o.az + oz * q - mz) * nz;
+      // (the other carriageway of the same road, as Dr. J.B. Danquah Avenue's two either side of their lawn median, or
+      // any road running this close alongside)
+      if (off > 3 && (off < s.w + o.w + 2 * WALK + 4 || (o.name === s.name && off < 40))) { median = true; break; }
     }
     if (median) { SIDEWALK_STATS.median++; continue; }
-    // 3. a mapped footway running beside the road on this side, along most of the segment: the sidewalk is there
-    let hits = 0, n = 0;
-    for (let a = 0; a <= L; a += 4) {
-      n++;
-      const px = s.ax + ux * Math.min(a, L), pz = s.az + uz * Math.min(a, L);
-      for (const p of grids[2].get(gkey(Math.floor(px / GRID), Math.floor(pz / GRID))) ?? []) {
-        const fx = p.bx - p.ax, fz = p.bz - p.az, FL = Math.hypot(fx, fz);
-        if (FL < 0.5 || Math.abs((fx * ux + fz * uz) / FL) < 0.85) continue;
-        const q = ((px - p.ax) * fx + (pz - p.az) * fz) / (FL * FL);
-        if (q < -0.05 || q > 1.05) continue;
-        const off = (p.ax + fx * q - px) * nx + (p.az + fz * q - pz) * nz;
-        if (off > s.w - 0.5 && off < s.w + 6) { hits++; break; }
-      }
-    }
-    if (hits >= Math.max(1, n * 0.5)) { s[side] = true; SIDEWALK_STATS.footway++; SIDEWALK_STATS.sides++; }
+    s[side] = true; SIDEWALK_STATS.sides++;
   }
 }
 
@@ -205,10 +174,11 @@ function plainField(kind: 1 | 2, x: number, z: number) {
   return f;
 }
 
-/** inside a mapped car park or plaza (their own paving runs up to the road: no lip, gutter or sidewalk across it) */
-const hardGrid = new Map<number, number[][]>();
+/** inside a mapped car park or plaza (their own paving runs up to the road: no kerb or sidewalk across it); with
+ *  `park`, a car park only */
+const hardGrid = new Map<number, [number[], boolean][]>();
 let hardReady = false;
-function inHardArea(x: number, z: number) {
+function inHardArea(x: number, z: number, park = false) {
   if (!hardReady) {
     hardReady = true;
     for (const a of AREAS) {
@@ -216,10 +186,11 @@ function inHardArea(x: number, z: number) {
       const p = Array.from(a.pts);
       let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
       for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); z0 = Math.min(z0, p[i + 1]); z1 = Math.max(z1, p[i + 1]); }
-      for (let i = Math.floor(x0 / GRID); i <= Math.floor(x1 / GRID); i++) for (let j = Math.floor(z0 / GRID); j <= Math.floor(z1 / GRID); j++) { const k = gkey(i, j); let l = hardGrid.get(k); if (!l) hardGrid.set(k, (l = [])); l.push(p); }
+      for (let i = Math.floor(x0 / GRID); i <= Math.floor(x1 / GRID); i++) for (let j = Math.floor(z0 / GRID); j <= Math.floor(z1 / GRID); j++) { const k = gkey(i, j); let l = hardGrid.get(k); if (!l) hardGrid.set(k, (l = [])); l.push([p, a.kind === 'parking']); }
     }
   }
-  for (const p of hardGrid.get(gkey(Math.floor(x / GRID), Math.floor(z / GRID))) ?? []) {
+  for (const [p, isPark] of hardGrid.get(gkey(Math.floor(x / GRID), Math.floor(z / GRID))) ?? []) {
+    if (park && !isPark) continue;
     let c = false;
     for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) if ((p[i + 1] > z) !== (p[j + 1] > z) && x < ((p[j] - p[i]) * (z - p[i + 1])) / (p[j + 1] - p[i + 1]) + p[i]) c = !c;
     if (c) return true;
@@ -227,26 +198,29 @@ function inHardArea(x: number, z: number) {
   return false;
 }
 
-/** no lip, gutter or sidewalk through a building or along a wall (a lamp post or a sign is not a wall: most of the
+/** between a main road and a car park beside it (3.5 m or less of ground between them): asphalt, no strip of grass */
+const PARK_GAP = 3.5;
+function nearPark(x: number, z: number) {
+  if (inHardArea(x, z)) return false;
+  for (const r of [1.2, 2.4, PARK_GAP]) for (let a = 0; a < 8; a++) if (inHardArea(x + Math.cos(a * Math.PI / 4) * r, z + Math.sin(a * Math.PI / 4) * r, true)) return true;
+  return false;
+}
+
+/** no kerb or sidewalk through a building or along a wall (a lamp post or a sign is not a wall: most of the
  *  cell must be blocked) */
 const excludedEdge = (x: number, z: number) => !!buildingAt(x, z, 0.3) || inHardArea(x, z) || [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]].filter(([a, b]) => meshBlocked(x + a, z + b, 0)).length >= 3;
 
 // ------------------------------------------------------------------------------------------------- materials
 /** the sidewalks' grey concrete pavers, dark joints, a little red dust (the owner's photos) */
 const herringbone = () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92', '#8a877f', '#93908a', '#7f7d78'], '#5f5d58', ['#b9b2a6', '#b9b2a6', '#8c6a55', '#4f4c47']);
-/** the gutter's floor: dark, damp concrete with silt */
-const gutterTex = () => canvasTex(128, (g, s) => {
-  g.fillStyle = '#26241f'; g.fillRect(0, 0, s, s);
-  for (let i = 0; i < 2500; i++) { g.fillStyle = ['#1e1c19', '#2f2c27', '#3a3129', '#24211d'][(rnd() * 4) | 0]; g.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 2, 1 + rnd() * 2); }
-});
 /** kerb concrete: weathered grey with a little red dust */
 const concreteTex = () => canvasTex(128, (g, s) => {
   g.fillStyle = '#9a948a'; g.fillRect(0, 0, s, s);
   for (let i = 0; i < 2500; i++) { g.fillStyle = ['#8a847a', '#a8a298', '#8f7f70', '#b0aaa0'][(rnd() * 4) | 0]; g.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 2, 1 + rnd() * 2); }
 });
 
-type Mat = 'road' | 'walk' | 'gutter' | 'concrete' | 'paint' | 'kerb';
-/** the white stone kerb that lines every sidewalk */
+type Mat = 'road' | 'walk' | 'concrete' | 'paint' | 'kerb';
+/** the white stone kerb that guards every sidewalk (the owner: "the white stone that protect the side walk") */
 const kerbTex = () => canvasTex(128, (g, s) => {
   g.fillStyle = '#dcd9d0'; g.fillRect(0, 0, s, s);
   for (let i = 0; i < 1800; i++) { g.fillStyle = ['#cfcbc1', '#e6e3db', '#c4bfb4', '#d6d2c8'][(rnd() * 4) | 0]; g.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 2, 1 + rnd() * 2); }
@@ -264,7 +238,6 @@ function materials() {
   mats = {
     road: new THREE.MeshStandardMaterial({ map: road, roughness: 0.93, color: '#e6e6e6', ...over }),
     walk: new THREE.MeshStandardMaterial({ map: herringbone(), roughness: 0.95 }),
-    gutter: new THREE.MeshStandardMaterial({ map: gutterTex(), roughness: 0.9, ...over }),
     concrete: new THREE.MeshStandardMaterial({ map: concreteTex(), roughness: 0.95 }),
     kerb: new THREE.MeshStandardMaterial({ map: kerbTex(), roughness: 0.85 }),
     paint: new THREE.MeshStandardMaterial({ color: '#ecebe4', roughness: 0.8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12 }),
@@ -272,7 +245,7 @@ function materials() {
   return mats;
 }
 /** world-space texture scale (m a picture) for each surface */
-const UV: Record<string, number> = { road: 8, walk: 1.6, gutter: 2, concrete: 2, paint: 1, kerb: 2 };
+const UV: Record<string, number> = { road: 8, walk: 1.6, concrete: 2, paint: 1, kerb: 2 };
 
 // ------------------------------------------------------------------------------------------------- one tile
 type Pt = [number, number, number[]]; // x, z, field values
@@ -353,17 +326,13 @@ function clip(poly: Pt[], f: (p: Pt) => number): Pt[] {
 
 interface Band { soup: string; test: ((v: number[]) => number)[] }
 /** v = [main field, side-road field, footpath field, sidewalk field]; the edge bands only where the nearest main road
- *  edge is one with a sidewalk on this side */
+ *  edge is one with a sidewalk on this side, and never across a side road or lane */
 const own = (v: number[]) => v[0] - v[3] + 0.3;
 const BANDS: Band[] = [
   { soup: 'road', test: [(v) => -v[0]] },
-  { soup: 'lip', test: [own, (v) => v[3], (v) => LIP - v[3], (v) => v[1] - 0.6] },
-  { soup: 'gutter', test: [own, (v) => v[3] - LIP, (v) => GUTTER - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
-  // (a footpath crossing the gutter: paved over, a slab at the sidewalk's height)
-  { soup: 'walk', test: [own, (v) => v[3] - LIP, (v) => GUTTER - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
-  // (the white stone kerb along the sidewalk's road side, a little higher; flush where a footpath crosses)
-  { soup: 'kerb', test: [own, (v) => v[3] - GUTTER, (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
-  { soup: 'walk', test: [own, (v) => v[3] - GUTTER, (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
+  // (the white stone kerb at the road's edge; flush, sidewalk paving, where a footpath meets the road)
+  { soup: 'kerb', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
+  { soup: 'walk', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
   { soup: 'walk', test: [own, (v) => v[3] - KERB, (v) => WALK - v[3], (v) => v[1] - 0.6] },
 ];
 
@@ -385,8 +354,6 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
   }
   const soups: Record<string, Soup> = {
     road: new Soup('road', H.road, null),
-    lip: new Soup('concrete', H.lip, H.road),
-    gutter: new Soup('gutter', H.gutter, null),
     walk: new Soup('walk', H.walk, H.edging),
     kerb: new Soup('kerb', H.kerb, H.edging),
     kerbSides: new Soup('kerb', 0, null),
@@ -401,6 +368,13 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
       const ks = [j * V + i, j * V + i + 1, (j + 1) * V + i + 1, (j + 1) * V + i];
       const m = ks.map((k) => fm[k]);
       const cx = x0 + (i + 0.5) * CELL, cz = z0 + (j + 0.5) * CELL;
+      // (the ground between the road and a car park beside it: asphalt)
+      const gap = Math.min(...m) >= 0 && Math.min(...m) < PARK_GAP && !buildingAt(cx, cz) && !excludedAll(cx, cz) && nearPark(cx, cz);
+      if (gap) {
+        if (run && run.soup !== 'road') flush(i);
+        if (!run) run = { soup: 'road', i0: i };
+        continue;
+      }
       if (Math.min(...m) > WALK) { flush(i); continue; }
       if (excludedAll(cx, cz)) { flush(i); continue; }
       const edgeOk = !excludedEdge(cx, cz);
@@ -437,13 +411,11 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
       soups[name].poly(outline);
     }
   }
-  soups.lip.walls(soups.walls);
   soups.walk.walls(soups.walls);
   soups.kerb.walls(soups.kerbSides);
-  soups.walls.append(soups.lip);
   soups.kerb.append(soups.kerbSides);
   const dashes = centreDashes(x0, z0);
-  return { road: soups.road, concrete: soups.walls, gutter: soups.gutter, walk: soups.walk, paint: dashes, kerb: soups.kerb };
+  return { road: soups.road, concrete: soups.walls, walk: soups.walk, paint: dashes, kerb: soups.kerb };
 }
 
 /** the dashed centre line of the main roads (the owner's photo): 3 m dashes, 6 m gaps, kept clear of junctions */
@@ -518,7 +490,7 @@ export class RoadEdges {
   /** the four pieces' surfaces merged into one mesh a material */
   private finish(t: Big) {
     const m = materials(), group = new THREE.Group();
-    for (const name of ['road', 'concrete', 'gutter', 'walk', 'paint', 'kerb'] as Mat[]) {
+    for (const name of ['road', 'concrete', 'walk', 'paint', 'kerb'] as Mat[]) {
       const all = new Soup(name, 0, null);
       for (const p of t.pieces) if (p) all.append(p[name]);
       const g = all.geometry();
@@ -532,7 +504,7 @@ export class RoadEdges {
   }
 }
 
-/** on a main road's asphalt, gutter or sidewalk drawn here (trees of the converted campus standing in it are left out,
+/** on a main road's asphalt or sidewalk drawn here (trees of the converted campus standing in it are left out,
  *  and a free-ridden bike rides over it) */
 export function onEdges(x: number, z: number, pad = 0) {
   prepare();
@@ -542,11 +514,11 @@ export function onEdges(x: number, z: number, pad = 0) {
   return w < WALK + pad && m - w + 0.3 >= 0 && !excludedAll(x, z);
 }
 
-/** how far above the ground a free-ridden bike is here: up on a sidewalk or a gutter's lip (m) */
+/** how far above the ground a free-ridden bike is here: up on a kerb or a sidewalk (m) */
 export function edgeLift(x: number, z: number) {
   prepare();
   const m = mainField(x, z), w = walkField(x, z);
   if (m < 0 || w > WALK || m - w + 0.3 < 0) return 0;
   if (excludedAll(x, z) || excludedEdge(x, z) || plainField(1, x, z) < 0.6) return 0;
-  return w < LIP ? H.lip : w < GUTTER ? (plainField(2, x, z) < 0 ? H.walk : H.gutter) : w < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
+  return w < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
 }

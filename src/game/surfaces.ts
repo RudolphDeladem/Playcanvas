@@ -49,24 +49,24 @@ const concreteSlabTex = () => canvasTex(256, (g, s) => {
 });
 
 /** class -> material (its texture, the metres a picture covers, a colour multiplying it, its height over the ground:
- *  above the converted campus's own ground layers, lifted up to 5 cm, campus.ts, and below the main roads' new asphalt
- *  at 7 cm, roadedges.ts) */
+ *  above the converted campus's own ground layers, lifted up to 1.6 cm, campus.ts, below the paving the original lays
+ *  3-5 cm over the ground, which wins where the two meet, and below the main roads' asphalt at 7 cm, roadedges.ts) */
 interface Look { tex: () => THREE.Texture; scale: number; color?: string; h: number }
 const LOOKS: Record<SurfaceClass, Look> = {
   // car parks: a light, worn asphalt (the original's car-park concrete read as asphalt from the ground); pavers where
   // the owner's photos show them
-  'parking': { tex: () => asphaltTexture(false), scale: 6, color: '#cfcfcf', h: 0.056 },
-  'parking-pavers': { tex: () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92'], '#5f5d58', ['#b9b2a6', '#4f4c47']), scale: 1.6, h: 0.056 },
-  'plaza': { tex: slabTex, scale: 2.4, h: 0.054 },
+  'parking': { tex: () => asphaltTexture(false), scale: 6, color: '#cfcfcf', h: 0.028 },
+  'parking-pavers': { tex: () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92'], '#5f5d58', ['#b9b2a6', '#4f4c47']), scale: 1.6, h: 0.028 },
+  'plaza': { tex: slabTex, scale: 2.4, h: 0.026 },
   // walkways of interlocking pavers: red-brown (the owner: "brown or reddish pedestrian walkways")
-  'pavers-walk': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.062 },
-  'pavers-road': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.062 },
-  'earth': { tex: earthTex, scale: 6, h: 0.056 },
-  'gravel': { tex: gravelTex, scale: 3, h: 0.056 },
-  'concrete-walk': { tex: concreteSlabTex, scale: 1.5, h: 0.062 },
-  'concrete-road': { tex: concreteSlabTex, scale: 4, h: 0.062 },
-  'asphalt-walk': { tex: () => asphaltTexture(false), scale: 6, color: '#dedede', h: 0.062 },
-  'grass': { tex: grassTexture, scale: 8, color: '#e4e0cc', h: 0.062 },
+  'pavers-walk': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.032 },
+  'pavers-road': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.032 },
+  'earth': { tex: earthTex, scale: 6, h: 0.028 },
+  'gravel': { tex: gravelTex, scale: 3, h: 0.028 },
+  'concrete-walk': { tex: concreteSlabTex, scale: 1.5, h: 0.032 },
+  'concrete-road': { tex: concreteSlabTex, scale: 4, h: 0.032 },
+  'asphalt-walk': { tex: () => asphaltTexture(false), scale: 6, color: '#dedede', h: 0.032 },
+  'grass': { tex: grassTexture, scale: 8, color: '#e4e0cc', h: 0.032 },
 };
 let mats: Partial<Record<SurfaceClass, THREE.MeshStandardMaterial>> = {};
 function material(c: SurfaceClass) {

@@ -7,8 +7,9 @@ import { Campus } from '../../src/engine/campus';
 import { groundHeight } from '../../src/game/relief';
 import * as THREE from '../../src/engine/lite3';
 import { Surfaces } from '../../src/game/surfaces';
-import { RoadEdges, SIDEWALK_STATS, sidewalkSegments } from '../../src/game/roadedges';
+import { RoadEdges } from '../../src/game/roadedges';
 import { VEG_DROPS, vegetationBlocked } from '../../src/game/vegrules';
+import { buildBalmeShrubs } from '../../src/game/shrubs';
 import { loadCollision } from '../../src/game/collision';
 
 const q = new URLSearchParams(location.search);
@@ -31,7 +32,7 @@ if (game) {
   e.world.addChild(scene.entity);
   surfaces = new Surfaces();
   edges = new RoadEdges();
-  scene.add(surfaces.group, edges.group);
+  scene.add(surfaces.group, edges.group, buildBalmeShrubs());
   campus.dropInstance = vegetationBlocked;
 }
 const cam = e.camera;
@@ -54,7 +55,6 @@ e.app.on('update', () => {
   await new Promise((res) => setTimeout(res, +(q.get('settle') ?? 2500)));
   // ?hide=id,id: those materials not drawn (checks)
   for (const id of (q.get('hide') ?? '').split(',').filter(Boolean)) campus.setVisible(+id, false);
-  if (q.get('sidewalks') === '1') (window as any).__sidewalks = sidewalkSegments();
-  (window as any).__stats = { ...campus.stats, ...(game ? { sidewalks: SIDEWALK_STATS, veg: VEG_DROPS } : {}), drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
+  (window as any).__stats = { ...campus.stats, ...(game ? { veg: VEG_DROPS } : {}), drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
   (window as any).__done = true;
 })();
