@@ -12,10 +12,15 @@
 // - the median of a dual road (Dr. J.B. Danquah Avenue, the owner's satellite picture): clipped shrubs only;
 // - excess trees (the owner, 2026-10-19): outside the mapped woods, a tree over 3 m tall standing within 6 m of one
 //   already kept is left out, so no two crowns crowd into one; street trees (22-34 m apart), bushes and hedges keep.
+// The test is on the plant's footprint, not only its foot (the owner's ground and sidewalk specification, 2026-10-19:
+// bushes stood on the asphalt where their middle was just off it): a bush or plant up to 3 m tall is tested at its foot
+// and round it at its own radius (up to 1.5 m); a tree at its trunk and half a metre round (a crown may overhang a
+// road, as street trees do). Paving read off the satellite picture (satground.ts) counts as hard ground.
 import { AREAS, buildingAt } from './campusmap';
 import { roadClearance } from './life';
 import { inMedian, onEdges } from './roadedges';
 import { onHardSurface } from './surfaces';
+import { satClassAt } from './satground';
 
 const GRID = 32;
 const key = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
@@ -71,10 +76,17 @@ function crowded(x: number, z: number) {
 }
 
 /** trees and plants left out so far, by reason (the checks) */
-export const VEG_DROPS = { road: 0, edge: 0, surface: 0, area: 0, building: 0, balme: 0, median: 0, crowded: 0, kept: 0 };
+export const VEG_DROPS = { road: 0, edge: 0, surface: 0, area: 0, satellite: 0, building: 0, balme: 0, median: 0, crowded: 0, kept: 0 };
 /** whether a tree or plant standing at (x, z), h metres tall, is left out */
-export function vegetationBlocked(x: number, z: number, h = 0) {
-  const why = roadClearance(x, z, 6, -1, true) < 0 ? 'road' : onEdges(x, z, 0.4) ? 'edge' : onHardSurface(x, z) ? 'surface' : inMappedHardArea(x, z) ? 'area' : buildingAt(x, z) ? 'building' : inBalmeBeds(x, z) ? 'balme' : inMedian(x, z) ? 'median' : null;
+function hardAt(x: number, z: number) {
+  const sat = satClassAt(x, z);
+  return roadClearance(x, z, 6, -1, true) < 0 ? 'road' : onEdges(x, z, 0.4) ? 'edge' : onHardSurface(x, z) ? 'surface' : inMappedHardArea(x, z) ? 'area' : sat === 'parking' ? 'satellite' : null;
+}
+export function vegetationBlocked(x: number, z: number, h = 0, r = 0) {
+  let why: keyof typeof VEG_DROPS | null = hardAt(x, z) ?? (buildingAt(x, z) ? 'building' : inBalmeBeds(x, z) ? 'balme' : inMedian(x, z) ? 'median' : null);
+  // (the footprint: eight points round the foot)
+  const reach = h <= 3 ? Math.min(1.5, r) : 0.5;
+  if (!why && reach > 0.2) for (let a = 0; a < 8 && !why; a++) why = hardAt(x + Math.cos(a * Math.PI / 4) * reach, z + Math.sin(a * Math.PI / 4) * reach);
   if (why) { VEG_DROPS[why]++; return true; }
   // the spacing between trees: one decision a spot
   const d = decidedAt(x, z);

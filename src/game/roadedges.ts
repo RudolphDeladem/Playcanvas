@@ -37,6 +37,21 @@ const KERB = 0.25, WALK = 2.25;
 const H = { road: 0.07, kerb: 0.2, walk: 0.12, edging: -0.05 };
 /** how round the corners where roads meet are (the smooth minimum's reach, m) */
 const ROUND = 4;
+/** an island between roads: asphalt on both sides along two different axes within 16 m (a roundabout's island, a
+ *  median's end where a road crosses it; a strip of ground between two roads alongside is ringed along one axis only):
+ *  its white kerb, no sidewalk round it */
+function betweenRoads(x: number, z: number) {
+  const road = (a: number) => {
+    const c = Math.cos(a), s = Math.sin(a);
+    for (const r of [3, 6, 9, 12, 16]) if (mainField(x + c * r, z + s * r) < 0) return true;
+    return false;
+  };
+  let axes = 0;
+  for (let a = 0; a < 4 && axes < 2; a++) if (road((a * Math.PI) / 4) && road((a * Math.PI) / 4 + Math.PI)) axes++;
+  return axes >= 2;
+}
+/** how far round a corner into a road without a sidewalk the kerb and sidewalk carry on (m) */
+const WRAP = 4;
 const TILE = 64, CELL = 1, N = TILE / CELL;
 
 // ------------------------------------------------------------------------------------------------- the roads
@@ -251,6 +266,9 @@ export function medianHedges() {
       if (seen.has(key)) continue;
       const [F, , P] = medianAt(x, z);
       if (F < 1.6 || P < 0.8) continue;
+      // (clear of the asphalt as drawn: the main roads' rounded junction corners reach into the median where a road
+      // crosses it, and a side road may cross at a slant; a shrub is 0.62 m round)
+      if (mainField(x, z) < 1.2 || plainField(1, x, z) < 1.2 || plainField(2, x, z) < 0.9) continue;
       seen.add(key); out.push([x, z]);
     }
   }
@@ -418,19 +436,40 @@ function clip(poly: Pt[], f: (p: Pt) => number): Pt[] {
 interface Band { soup: string; test: ((v: number[]) => number)[] }
 /** v = [main field, side-road field, footpath field, sidewalk field]; the edge bands only where the nearest main road
  *  edge is one with a sidewalk on this side, and never across a side road or lane */
-const own = (v: number[]) => v[0] - v[3] + 0.3;
+// (the bands are measured from the asphalt's edge as drawn, v[0], and run where the nearest sidewalked edge, v[3], is
+// that edge or within WRAP of it: round the rounded corner where a road without a sidewalk joins, ending a few metres
+// into it, instead of stopping where that road's flare begins and leaving bare asphalt against the grass; the owner's
+// ground and sidewalk specification, 2026-10-19, screenshot 3)
+// (only close by a sidewalked edge; islands between roads get their kerb only, betweenRoads)
+// (and only carrying on from a sidewalk that is drawn: wrapNow is set a cell at a time, buildTile)
+let wrapNow = WRAP;
+const own = (v: number[]) => Math.min(wrapNow - (v[3] - v[0]), WALK + 2 - v[3]);
+/** a sidewalk drawn at (x, z) along its own road's edge (not a wrap round a corner) */
+function strictWalk(x: number, z: number) {
+  const m = mainField(x, z);
+  if (m < KERB || m > WALK || walkField(x, z) - m > 0.3) return false;
+  return !excludedAll(x, z) && !excludedEdge(x, z) && plainField(1, x, z) >= 0.6 && !betweenRoads(x, z);
+}
+/** a drawn sidewalk within 4.5 m of (x, z): a corner may be wrapped from it */
+function walkNear(x: number, z: number) {
+  for (const r of [2, 3.5, 4.5]) for (let a = 0; a < 12; a++) if (strictWalk(x + Math.cos(a * Math.PI / 6) * r, z + Math.sin(a * Math.PI / 6) * r)) return true;
+  return false;
+}
 const BANDS: Band[] = [
   { soup: 'road', test: [(v) => -v[0]] },
   // (the white stone kerb at the road's edge; flush, sidewalk paving, where a footpath meets the road)
-  { soup: 'kerb', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
-  { soup: 'walk', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
-  { soup: 'walk', test: [own, (v) => v[3] - KERB, (v) => WALK - v[3], (v) => v[1] - 0.6] },
+  { soup: 'kerb', test: [own, (v) => v[0], (v) => KERB - v[0], (v) => v[1] - 0.6, (v) => v[2]] },
+  { soup: 'walk', test: [own, (v) => v[0], (v) => KERB - v[0], (v) => v[1] - 0.6, (v) => -v[2]] },
+  { soup: 'walk', test: [own, (v) => v[0] - KERB, (v) => WALK - v[0], (v) => v[1] - 0.6] },
   // the median (v[4..6] = F, I, P): asphalt where a road crosses it, the islands' white kerb, a paved strip where a
   // footpath crosses
   { soup: 'road', test: [(v) => v[0], (v) => v[5], (v) => -v[4], (v) => v[6]] },
   { soup: 'kerb', test: [(v) => v[0], (v) => v[4], (v) => KERB - v[4], (v) => v[6]] },
   { soup: 'walk', test: [(v) => v[0], (v) => v[5], (v) => -v[6]] },
+  // an island between roads (betweenRoads): its white kerb all round
+  { soup: 'kerb', test: [(v) => v[0], (v) => KERB - v[0], (v) => v[1] - 0.6] },
 ];
+const ISLAND_KERB = BANDS[BANDS.length - 1];
 
 /** builds one 64 m piece: its surfaces, one soup a material; null when no main road comes near it */
 function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
@@ -477,9 +516,13 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
       if (Math.min(...m) > WALK && !inMed) { flush(i); continue; }
       if (excludedAll(cx, cz)) { flush(i); continue; }
       const edgeOk = !excludedEdge(cx, cz);
+      // (an island between roads: its white kerb, no sidewalk)
+      const between = edgeOk && betweenRoads(cx, cz);
+      // (a cell round a corner: only next to a drawn sidewalk)
+      wrapNow = ks.some((k) => fw[k] - fm[k] > 0.3 && fw[k] - fm[k] <= WRAP) && fm[ks[0]] < WALK + 0.5 && !walkNear(cx, cz) ? 0.3 : WRAP;
       // a whole cell of asphalt, or of sidewalk clear of side roads and footpaths: part of a strip
       const w = ks.map((k) => fw[k]);
-      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : !inMed && edgeOk && Math.min(...w) >= KERB && Math.max(...w) <= WALK && ks.every((k) => fs[k] >= 0.6 && fm[k] - fw[k] + 0.3 >= 0) ? 'walk' : null;
+      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : !inMed && edgeOk && Math.min(...m) >= KERB && Math.max(...m) <= WALK && !between && ks.every((k) => fs[k] >= 0.6 && fw[k] - fm[k] <= wrapNow && fw[k] <= WALK + 2) ? 'walk' : null;
       if (whole) {
         if (run && run.soup !== whole) flush(i);
         if (!run) run = { soup: whole, i0: i };
@@ -490,6 +533,7 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
       // (the corners in order: (i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1): clockwise seen from above, x east, z south)
       for (const b of BANDS) {
         if (b.soup !== 'road' && !edgeOk) continue;
+        if (between ? b === BANDS[1] || b === BANDS[2] || b === BANDS[3] : b === ISLAND_KERB) continue;
         // (the widened asphalt stops at a building's wall)
         if (b.soup === 'road' && buildingAt(cx, cz)) continue;
         let p = cell;
@@ -638,14 +682,29 @@ export function onEdges(x: number, z: number, pad = 0) {
   const m = mainField(x, z);
   if (m < pad) return !excludedAll(x, z);
   const w = walkField(x, z);
-  return w < WALK + pad && m - w + 0.3 >= 0 && !excludedAll(x, z);
+  return m < WALK + pad && w - m <= WRAP && w <= WALK + 2 && !excludedAll(x, z) && (m < KERB || !betweenRoads(x, z)) && (w - m <= 0.3 || walkNear(x, z));
 }
 
 /** how far above the ground a free-ridden bike is here: up on a kerb or a sidewalk (m) */
+/** on a main road's asphalt as drawn here (not where a site of the original draws its own) */
+export function onMainAsphalt(x: number, z: number) {
+  prepare();
+  if (mainField(x, z) >= -0.2 || excludedAll(x, z)) return false;
+  // (not on a median island)
+  const [F, I] = medianAt(x, z);
+  return !(I > 0 && F > 0);
+}
+/** the fields at (x, z) (checks: tools/view ?probe=x,z) */
+export function probeEdges(x: number, z: number) {
+  prepare();
+  return { main: mainField(x, z), walk: walkField(x, z), side: plainField(1, x, z), path: plainField(2, x, z), median: medianAt(x, z), excluded: excludedAll(x, z), lift: edgeLift(x, z) };
+}
 export function edgeLift(x: number, z: number) {
   prepare();
   const m = mainField(x, z), w = walkField(x, z);
-  if (m < 0 || w > WALK || m - w + 0.3 < 0) return 0;
+  if (m < 0 || m > WALK || w - m > WRAP || w > WALK + 2) return 0;
+  if (w - m > 0.3 && !walkNear(x, z)) return 0;
   if (excludedAll(x, z) || excludedEdge(x, z) || plainField(1, x, z) < 0.6) return 0;
-  return w < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
+  if (betweenRoads(x, z)) return m < KERB ? H.kerb : 0;
+  return m < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
 }

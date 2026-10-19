@@ -27,8 +27,8 @@ export class Campus {
   /** lift the ground layers apart (see build); false shows the campus as first converted, for comparisons */
   liftLayers = true;
   /** trees and plants (instanced parts tagged 'crown' or 'plant') left out where this says so (vegrules.ts): at their
-   *  foot (x, z), h metres tall */
-  dropInstance?: (x: number, z: number, h: number) => boolean;
+   *  foot (x, z), h metres tall, reaching r metres round it */
+  dropInstance?: (x: number, z: number, h: number, r: number) => boolean;
   /** called with 0..1 while the first tiles round the start load */
   onProgress?: (p: number) => void;
   manifest!: Manifest;
@@ -356,10 +356,10 @@ export class Campus {
         // (the grass tufts are not drawn: the owner had them removed from the game, 2026-10-18)
         const tag = this.manifest.materials[h.m]?.tag as string | undefined, veg = tag === 'crown' || tag === 'plant', sh = tag === 'plant' ? 5 : 3;
         // (a plant's height: its shape's top times the copy's vertical scale)
-        let top = 0;
-        if (veg) for (let v = 1; v < pos.length; v += 3) top = Math.max(top, pos[v]);
+        let top = 0, rad = 0;
+        if (veg) for (let v = 0; v < pos.length; v += 3) { top = Math.max(top, pos[v + 1]); rad = Math.max(rad, Math.hypot(pos[v], pos[v + 2])); }
         for (let i = 0; i < h.n; i++) {
-          if (tag === 'tuft' || (veg && this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14], top * Math.hypot(mats[i * 16 + 4], mats[i * 16 + 5], mats[i * 16 + 6])))) continue;
+          if (tag === 'tuft' || (veg && this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14], top * Math.hypot(mats[i * 16 + 4], mats[i * 16 + 5], mats[i * 16 + 6]), rad * Math.hypot(mats[i * 16], mats[i * 16 + 1], mats[i * 16 + 2])))) continue;
           // (the plants' shades in coarser steps: fewer tinted copies, fewer draws)
           const k = `${icol[i * 4] >> sh},${icol[i * 4 + 1] >> sh},${icol[i * 4 + 2] >> sh}`;
           let l = groups.get(k); if (!l) groups.set(k, (l = [])); l.push(i);

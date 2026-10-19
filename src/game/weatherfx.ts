@@ -9,6 +9,7 @@ import { groundHeight } from './relief';
 import { NODE_XZ, ROADS } from './campusmap';
 import { setWet } from './world';
 import { ROAD_WIDTH } from './life';
+import { edgeLift, onMainAsphalt } from './roadedges';
 
 const DROPS = 2600;
 const BOX = { x: 44, y: 22, z: 44 };
@@ -57,9 +58,18 @@ function puddleSpots() {
       const ux = (bx - ax) / len, uz = (bz - az) / len;
       for (let t = r() * 9; t < len; t += 6 + r() * 12) {
         if (r() < 0.55) continue;
-        // puddles gather near the edges more than in the crown of the road
-        const side = (r() < 0.5 ? -1 : 1) * (half - 0.6 - r() * r() * (half - 0.6));
-        out.push(ax + ux * t - uz * side, az + uz * t + ux * side, r() * Math.PI, 0.7 + r() * 1.2);
+        // puddles gather near the edges more than in the crown of the road, but wholly on the asphalt: a puddle reaches
+        // about 0.95 of its size round its middle (1.6 by 1 times its size, turned any way), and stops 0.3 m short of
+        // the road's edge (the owner's ground and sidewalk specification, 2026-10-19: puddles lay over the kerb and the
+        // sidewalk)
+        const rot = r() * Math.PI, size = 0.7 + r() * 1.2, room = half - 0.3 - 0.95 * size;
+        if (room <= 0) continue;
+        const side = (r() < 0.5 ? -1 : 1) * (room - r() * r() * room);
+        const x = ax + ux * t - uz * side, z = az + uz * t + ux * side;
+        // (and nowhere a sidewalk, a kerb or a median island is drawn under it, roadedges.ts)
+        let clear = true;
+        for (let k = 0; k < 8 && clear; k++) { const px = x + Math.cos(k * Math.PI / 4) * size, pz = z + Math.sin(k * Math.PI / 4) * size; if (edgeLift(px, pz) > 0 || (road.cls <= 2 && !onMainAsphalt(px, pz))) clear = false; }
+        if (clear) out.push(x, z, rot, size);
       }
     }
   }
@@ -110,7 +120,7 @@ export function createWeatherFx(scene: THREE.Scene, engine: Engine): WeatherFx {
   const POOL = 48;
   const puddleMat = new THREE.MeshStandardMaterial({
     color: '#3a4250', roughness: 0.04, metalness: 0.85, alphaMap: puddleTexture(), transparent: true, opacity: 0,
-    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -16,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
   });
   const puddles = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), puddleMat, POOL);
   puddles.count = 0;
@@ -130,7 +140,11 @@ export function createWeatherFx(scene: THREE.Scene, engine: Engine): WeatherFx {
     for (const [, i] of near) {
       if (n >= POOL) break;
       const s = spots[i + 3];
-      m.compose(v.set(spots[i], 0.02 + groundHeight(spots[i], spots[i + 1]), spots[i + 1]), q.setFromAxisAngle(up, spots[i + 2]), sc.set(s * 1.6, 1, s));
+      // (just over the road's top: the main roads' asphalt is drawn 7 cm over the ground, roadedges.ts, the other roads
+      // are the original's own at 3-5 cm; they were laid at 2 cm with a strong depth bias, which shows them through the
+      // road, the kerb and the sidewalk from far off and hides them close up: a dark patch that moved with the rider)
+      const y = groundHeight(spots[i], spots[i + 1]) + (onMainAsphalt(spots[i], spots[i + 1]) ? 0.078 : 0.058);
+      m.compose(v.set(spots[i], y, spots[i + 1]), q.setFromAxisAngle(up, spots[i + 2]), sc.set(s * 1.6, 1, s));
       puddles.setMatrixAt(n++, m);
     }
     puddles.count = n;

@@ -58,6 +58,8 @@ nothing was invented.
 
 **2026-10-19, synchronised with the original (`dc022c1`) and held to the map's evidence**: the campus reconverted with the original's Pent, Evandy, TF and Bani work; roads back at the map's widths; sidewalks with white stone kerbs along the named main roads and no gutters or drains; the grass tufts gone, no trees on hard ground, shrubs for the Balme Library's tree groves and crowded trees thinned; double-sided ground and roofs lit as in the original. See [`SURFACES_REPORT.md`](SURFACES_REPORT.md).
 
+**2026-10-19, the owner's ground and sidewalk specification**: bare earth and paving read off the satellite picture where the game had lawn; sidewalks and white kerbs turn junction corners, and islands between roads get a kerb; no plant on hard ground, tested on its footprint; the rain's puddles stay on the asphalt (they had shown through the kerbs and sidewalks from afar). See [`GROUND_SIDEWALK_REPORT.md`](GROUND_SIDEWALK_REPORT.md).
+
 **2026-10-19, ground surfaces**: the campus's mapped ground is classified from the evidence (car parks, pavers, earth, gravel, concrete, plazas, lawns), and the car parks that rendered as grass and the paver lanes that rendered as asphalt are corrected. See [`SURFACES_REPORT.md`](SURFACES_REPORT.md).
 
 **2026-10-18, the owner's road corrections** (photos of campus roads and sidewalks) — `src/game/roadedges.ts`:

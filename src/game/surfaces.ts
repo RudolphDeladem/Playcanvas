@@ -15,6 +15,7 @@ import { groundHeight } from './relief';
 import { asphaltTexture, concreteTexture, grassTexture } from './textures';
 import { canvasTex, paverTexture, rnd } from './groundtex';
 import { excludedAll } from './groundrules';
+import { SAT, SAT_CLASSES, loadSatGround, satTriangles } from './satground';
 
 export type SurfaceClass = 'parking' | 'parking-pavers' | 'plaza' | 'pavers-walk' | 'pavers-road' | 'earth' | 'gravel' | 'concrete-walk' | 'concrete-road' | 'asphalt-walk' | 'asphalt-area' | 'grass';
 interface Feature { id: string; geom: 'area' | 'line'; cls: SurfaceClass | null; pts: number[]; w?: number }
@@ -58,7 +59,7 @@ const concreteSlabTex = () => canvasTex(256, (g, s) => {
  *  above the converted campus's own ground layers, lifted up to 1.6 cm, campus.ts, below the paving the original lays
  *  3-5 cm over the ground, which wins where the two meet, and below the main roads' asphalt at 7 cm, roadedges.ts) */
 interface Look { tex: () => THREE.Texture; scale: number; color?: string; h: number }
-const LOOKS: Record<SurfaceClass, Look> = {
+export const LOOKS: Record<SurfaceClass, Look> = {
   // car parks: a light, worn asphalt (the original's car-park concrete read as asphalt from the ground); pavers where
   // the owner's photos show them
   // (the same surface as the original's own car parks, world.ts: its concrete texture tinted #b9bbbf, 5 m a picture, the
@@ -79,7 +80,7 @@ const LOOKS: Record<SurfaceClass, Look> = {
   'grass': { tex: grassTexture, scale: 8, color: '#e4e0cc', h: 0.032 },
 };
 let mats: Partial<Record<SurfaceClass, THREE.MeshStandardMaterial>> = {};
-function material(c: SurfaceClass) {
+export function material(c: SurfaceClass) {
   return (mats[c] ??= new THREE.MeshStandardMaterial({ map: LOOKS[c].tex(), color: LOOKS[c].color ?? '#ffffff', roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }));
 }
 
@@ -195,7 +196,11 @@ export class Surfaces {
         }
       }
     }
-    const groups = new Map<string, Chunk>();
+    this.addBins(bins);
+  }
+  private groups = new Map<string, Chunk>();
+  /** one mesh a chunk and class from the binned triangles */
+  private addBins(bins: Map<string, { pos: number[]; nrm: number[]; uv: number[] }>) {
     for (const [key, b] of bins) {
       const [i, j, cls] = key.split(',');
       const g = new THREE.BufferGeometry();
@@ -205,10 +210,38 @@ export class Surfaces {
       const mesh = new THREE.Mesh(g, material(cls as SurfaceClass));
       mesh.receiveShadow = true;
       const ck = `${i},${j}`;
-      let c = groups.get(ck);
-      if (!c) { groups.set(ck, (c = { cx: (+i + 0.5) * CHUNK, cz: (+j + 0.5) * CHUNK, group: new THREE.Group() })); this.group.add(c.group); this.chunks.push(c); }
+      let c = this.groups.get(ck);
+      if (!c) { this.groups.set(ck, (c = { cx: (+i + 0.5) * CHUNK, cz: (+j + 0.5) * CHUNK, group: new THREE.Group() })); this.group.add(c.group); this.chunks.push(c); }
       c.group.add(mesh);
     }
+  }
+  /** the ground types read off the satellite picture (satground.ts): loaded after the start, then drawn as the rest */
+  async addSatellite() {
+    const map = await loadSatGround();
+    const bins = new Map<string, { pos: number[]; nrm: number[]; uv: number[] }>();
+    // (a band of rows at a time between frames: the start does not stall)
+    for (let r0 = 0; r0 < SAT.h; r0 += 64) {
+    await new Promise((res) => setTimeout(res, 0));
+    SAT_CLASSES.forEach((cls, k) => {
+      if (!cls) return;
+      const look = LOOKS[cls];
+      satTriangles(map, k, CHUNK, (ck, tris) => {
+        const key = `${ck},${cls}`;
+        let b = bins.get(key);
+        if (!b) bins.set(key, (b = { pos: [], nrm: [], uv: [] }));
+        for (let n = 0; n < tris.length; n += 3) {
+          const t = [tris[n], tris[n + 1], tris[n + 2]];
+          const ccw = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]) > 0;
+          for (const v of ccw ? [t[0], t[2], t[1]] : t) {
+            b.pos.push(v[0], groundHeight(v[0], v[1]) + look.h, v[1]);
+            b.nrm.push(0, 1, 0);
+            b.uv.push(v[0] / look.scale, v[1] / look.scale);
+          }
+        }
+      }, [r0, r0 + 64]);
+    });
+    }
+    this.addBins(bins);
   }
   /** shows the chunks near the camera */
   update(x: number, z: number) {

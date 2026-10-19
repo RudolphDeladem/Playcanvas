@@ -7,6 +7,7 @@ original Three.js game (`RudolphDeladem/legonrush-world`) is its reference and s
 - What exists and how far each part is recreated: [`docs/FEATURE_INVENTORY.md`](docs/FEATURE_INVENTORY.md)
 - How it is built (engine, streamed campus, modelling kit, converter, data formats): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Ground surfaces (car parks, pavers, earth lanes) and the evidence for each: [`docs/SURFACES_REPORT.md`](docs/SURFACES_REPORT.md)
+- Ground types from the satellite picture, sidewalks at junctions, plants off hard ground, the rain's puddles, the zone audit: [`docs/GROUND_SIDEWALK_REPORT.md`](docs/GROUND_SIDEWALK_REPORT.md)
 - Tests, performance, comparison with the original, what remains: [`docs/REPORT.md`](docs/REPORT.md)
 
 ## Run it

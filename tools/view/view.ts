@@ -7,10 +7,11 @@ import { Campus } from '../../src/engine/campus';
 import { groundHeight } from '../../src/game/relief';
 import * as THREE from '../../src/engine/lite3';
 import { Surfaces } from '../../src/game/surfaces';
-import { RoadEdges, medianHedges } from '../../src/game/roadedges';
+import { RoadEdges, medianHedges, probeEdges } from '../../src/game/roadedges';
 import { VEG_DROPS, vegetationBlocked } from '../../src/game/vegrules';
 import { buildBalmeShrubs } from '../../src/game/shrubs';
 import { loadCollision } from '../../src/game/collision';
+import { loadSatGround } from '../../src/game/satground';
 
 const q = new URLSearchParams(location.search);
 const [x, h, z, tx, th, tz, fov] = (q.get('cam') ?? '0,60,120,0,0,0,55').split(',').map(Number);
@@ -26,11 +27,12 @@ const campus = new Campus(e);
 if (q.get('nolift') === '1') campus.liftLayers = false;
 // ?game=1: the game's own ground layers too (the corrected surfaces and the road edges), trees cleared as in the game
 const game = q.get('game') === '1';
-let surfaces: Surfaces | null = null, edges: RoadEdges | null = null;
+let surfaces: Surfaces | null = null, edges: RoadEdges | null = null, sat: Promise<void> | null = null;
 if (game) {
   const scene = new THREE.Scene();
   e.world.addChild(scene.entity);
   surfaces = new Surfaces();
+  sat = surfaces.addSatellite();
   edges = new RoadEdges();
   scene.add(surfaces.group, edges.group, buildBalmeShrubs());
   campus.dropInstance = vegetationBlocked;
@@ -39,15 +41,19 @@ const cam = e.camera;
 cam.camera!.fov = fov || 55;
 cam.setPosition(x, groundHeight(x, z) + h, z);
 cam.lookAt(new pc.Vec3(tx, groundHeight(tx, tz) + th, tz));
+// (with the game's layers, the tiles wait for the satellite's class map: their plants are tested against it)
+let satReady = !game;
+if (game) loadSatGround().finally(() => { satReady = true; });
 e.app.on('update', () => {
   const p = cam.getPosition();
-  campus.update(p.x, p.z);
+  if (satReady) campus.update(p.x, p.z);
   surfaces?.update(p.x, p.z);
   // the sun's shadows round the camera's target
 });
 (async () => {
   await campus.ready;
-  if (game) { await loadCollision(); edges!.preload(tx, tz, 300); }
+  if (game) await loadSatGround();
+  if (game) { await loadCollision(); edges!.preload(tx, tz, 300); await sat!; }
   if (tod !== 'day') campus.setNight(tod === 'night', SKIES[tod].lamps);
   const r = Math.max(260, Math.hypot(tx - x, tz - z) + 150);
   await campus.preload(x, z, Math.min(r, campus.radius));
@@ -56,6 +62,8 @@ e.app.on('update', () => {
   // ?hide=id,id: those materials not drawn (checks)
   for (const id of (q.get('hide') ?? '').split(',').filter(Boolean)) campus.setVisible(+id, false);
   // ?hedges=1: where the median hedges stand (checks)
+  // ?probe=x,z;x,z: the road-edge fields there (checks)
+  if (q.get('probe')) (window as any).__probe = q.get('probe')!.split(';').map((p) => { const [px, pz] = p.split(',').map(Number); return [px, pz, probeEdges(px, pz)]; });
   if (q.get('hedges') === '1') (window as any).__hedges = medianHedges();
   (window as any).__stats = { ...campus.stats, ...(game ? { veg: VEG_DROPS } : {}), drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
   (window as any).__done = true;

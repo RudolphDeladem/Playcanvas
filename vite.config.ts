@@ -35,6 +35,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         runtimeCaching: [
           { urlPattern: /\/campus\/.*\.(json|lrz|webp)$/, handler: 'CacheFirst', options: { cacheName: 'legonrush-campus', expiration: { maxEntries: 4000 } } },
+          // (the ground types read off the satellite picture, satground.ts: cached once fetched, like the tiles)
+          { urlPattern: /\/geo\/ground-classes\.png$/, handler: 'CacheFirst', options: { cacheName: 'legonrush-geo', expiration: { maxEntries: 4 } } },
         ],
       },
     }),

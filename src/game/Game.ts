@@ -16,6 +16,7 @@ import { deckAt } from './cutplan';
 import { RoadEdges, edgeLift, onEdges } from './roadedges';
 import { SOLIDS } from './solids';
 import { Surfaces, onHardSurface } from './surfaces';
+import { loadSatGround } from './satground';
 import { vegetationBlocked } from './vegrules';
 import { buildBalmeShrubs } from './shrubs';
 import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
@@ -507,8 +508,10 @@ export class Game {
     this.engine.world.addChild(this.scene.entity);
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
     this.campus = new Campus(this.engine);
+    // (the campus streams in only once the satellite's class map is in: the plants are tested against it, vegrules.ts)
+    loadSatGround().catch((err) => console.warn('satellite ground', err)).finally(() => { this.satDone = true; });
     // the campus's trees and plants on hard ground are left out (vegrules.ts), with their trunks' solids
-    this.campus.dropInstance = (x, z, h) => { const drop = vegetationBlocked(x, z, h); if (drop) clear(x, z); return drop; };
+    this.campus.dropInstance = (x, z, h, r) => { const drop = vegetationBlocked(x, z, h, r); if (drop) clear(x, z); return drop; };
     // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
     nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
 
@@ -518,6 +521,8 @@ export class Game {
     // the corrected ground surfaces: car parks, plazas, paver, earth and gravel paths (surfaces.ts)
     this.surfaces = new Surfaces();
     this.scene.add(this.surfaces.group);
+    // (and the ground types read off the satellite picture, satground.ts, once its class map has loaded)
+    this.surfaces.addSatellite().catch((err) => console.warn('satellite ground', err));
     // short shrubs where the Balme Library's tree groves were (shrubs.ts)
     this.scene.add(buildBalmeShrubs());
     this.setRoute(CAMPUS_LOOP);
@@ -556,6 +561,8 @@ export class Game {
     // the tiles round the start (the menu scene) and the collision data; the rest streams in round the camera
     const p = this.pose(this.d);
     this.campus.onProgress = (f) => this.progress(0.95 * f);
+    // (the satellite's class map first: the plants of the first tiles are tested against its paving, vegrules.ts)
+    await loadSatGround().catch((err) => console.warn('satellite ground', err));
     await Promise.all([this.campus.preload(p.x, p.z, this.lowEnd ? 200 : 260), loadCollision()]);
     // (and so are their trunks, for the free ride)
     SOLIDS.filter((x, z) => !onEdges(x, z, 0.4) && !onHardSurface(x, z));
@@ -2204,8 +2211,9 @@ export class Game {
   }
 
   /** streams the campus round the camera, turns the labels to it and asks PlayCanvas for this frame */
+  private satDone = false;
   private draw(cam: THREE.PerspectiveCamera) {
-    this.campus.update(cam.position.x, cam.position.z);
+    if (this.satDone) this.campus.update(cam.position.x, cam.position.z);
     this.edges.update(cam.position.x, cam.position.z);
     this.surfaces.update(cam.position.x, cam.position.z);
     THREE.Sprite.face(this.engine.camera);
