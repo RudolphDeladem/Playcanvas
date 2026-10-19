@@ -16,7 +16,8 @@ import { RoadEdges } from '../../src/game/roadedges';
 import { loadCollision } from '../../src/game/collision';
 
 const q = new URLSearchParams(location.search);
-const N = 256;
+/** ?n=: the render's size in pixels; ?ctx=: how much ground round the feature it takes in (review sheets) */
+const N = +(q.get('n') ?? 256), CTX = +(q.get('ctx') ?? 1);
 const e = createEngine(document.getElementById('c') as HTMLCanvasElement, { preserveDrawingBuffer: true });
 e.app.autoRender = false;
 e.app.setCanvasFillMode(pc.FILLMODE_NONE);
@@ -79,7 +80,7 @@ if (after) {
     const p = f.pts;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); z0 = Math.min(z0, p[i + 1]); z1 = Math.max(z1, p[i + 1]); }
-    const pad = (f.w ?? 0) + 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, half = Math.max(x1 - x0, z1 - z0) / 2 + pad;
+    const pad = (f.w ?? 0) + 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, half = (Math.max(x1 - x0, z1 - z0) / 2 + pad) * CTX;
     // the ground's range under the footprint: the near plane 0.6 m above its highest point
     let gMin = Infinity, gMax = -Infinity;
     for (let a = 0; a <= 8; a++) for (let b = 0; b <= 8; b++) { const g = groundHeight(x0 + ((x1 - x0) * a) / 8, z0 + ((z1 - z0) * b) / 8); gMin = Math.min(gMin, g); gMax = Math.max(gMax, g); }

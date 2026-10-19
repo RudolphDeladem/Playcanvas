@@ -6,6 +6,7 @@ import * as THREE from '../engine/lite3';
 import { mergeGeometries, mergeVertices } from '../engine/lite3';
 import { groundShade, nearCut } from './shading';
 import { NODE_XZ, PLACES, ROADS } from './campusmap';
+import { OKJ_SEGS } from './okjplan';
 export { inLandmark } from './collision';
 
 /** real road widths by class: main, through, residential, service lane, footpath */
@@ -38,6 +39,16 @@ function segDist(s: Seg, x: number, z: number) {
   const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
   return Math.hypot(x - s.ax - dx * t, z - s.az - dz * t);
 }
+/** the N4 through the median's stretch and the Okponglo junction as built from their plan (okjplan.ts: the widenings,
+ *  the arms, the corners, the concrete bay): road for the clearance tests, not roads of their own (no route or
+ *  nearest-road lookup sees them) */
+const WIDE: Seg[] = OKJ_SEGS.map(([ax, az, bx, bz, half]) => ({ ax, az, bx, bz, half, road: -3, cls: 0 }));
+const wideDist = (x: number, z: number) => {
+  if (x < 890 || x > 1110 || z < 890 || z > 1660) return Infinity;
+  let best = Infinity;
+  for (const s of WIDE) if (z > Math.min(s.az, s.bz) - 6 - s.half && z < Math.max(s.az, s.bz) + 6 + s.half) best = Math.min(best, segDist(s, x, z) - s.half);
+  return best;
+};
 /**
  * Distance from (x, z) to the nearest road edge (negative on the road), looking
  * `reach` metres round; footpaths count only when `paths` is set.
@@ -53,7 +64,7 @@ export function roadClearance(x: number, z: number, reach = 12, skipRoad = -1, p
       if (d < best) best = d;
     }
   }
-  return best;
+  return Math.min(best, wideDist(x, z));
 }
 
 let nightOn = false;
@@ -145,7 +156,7 @@ function canopy(r: number, x: number, y: number, z: number, sy = 0.8, n = 9, see
     const rb = r * (0.4 + 0.14 * hash3(seed, i, r));
     parts.push(new THREE.IcosahedronGeometry(rb, 0).scale(1, 0.85, 1).translate(Math.cos(ang) * rad * r * k, yN * r * sy * k, Math.sin(ang) * rad * r * k));
   }
-  const g = mergeGeometries(parts.map((p) => p.toNonIndexed()))!;
+  const g = mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)))!;
   for (const p of parts) p.dispose();
   const pos = g.attributes.position;
   const nrm = new Float32Array(pos.count * 3);

@@ -262,7 +262,9 @@ const ZONES: Zone[] = [
   // each level drops at its retaining wall (owner: the paving outside runs flat to the wall, no slope)
   // (the owner's Balme and Pentagon brief, pairs 1 and 2: only the pool and its walking strips are down on the deck; the
   // lawns either side stand higher, at the middle terrace's level, behind low stone retaining edges)
-  { kind: 'hollow', x0: 0.7, x1: 15.3, z0: 60.3, z1: 93.5, depth: 2.4, w: 0.3, e: 0.3, n: 0.3, s: 0.5 },
+  // (the owner's marked aerial, 2026-10-15: no wall across the pool's south end; its slab paving runs on out to the road,
+  // so the deck climbs to the footway in one paved slope)
+  { kind: 'hollow', x0: 0.7, x1: 15.3, z0: 60.3, z1: 93.5, depth: 2.4, w: 0.3, e: 0.3, n: 0.3, s: 9 },
   { kind: 'hollow', x0: -6.6, x1: 24.6, z0: 60.3, z1: 93.5, depth: 1.2, w: 0.5, e: 0.5, n: 0.3, s: 0.5 },
   { kind: 'hollow', x0: -6.6, x1: 24.6, z0: 49, z1: 60.6, depth: 1.2, w: 0.5, e: 0.5, n: 0.3, s: 0.3 },
   // The Innovation Enclave, south of the engineering school: its six buildings stand up the hill on a terrace 2 m

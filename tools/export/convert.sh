@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 LOG=${LOG:-/tmp/legonrush-convert.log}
 # (a partial run, QUERY=?only=..., keeps the files already converted)
 [ -z "$QUERY" ] && rm -rf public/campus
-npx vite --config tools/export/vite.config.ts > "$LOG.server" 2>&1 &
+node node_modules/vite/bin/vite.js --config tools/export/vite.config.ts > "$LOG.server" 2>&1 &
 SERVER=$!
 sleep 5
 timeout ${TIMEOUT:-14000} node tools/export/run.mjs "tools/export/export.html${QUERY:-}" 14000000 > "$LOG" 2>&1

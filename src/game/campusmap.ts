@@ -47,7 +47,7 @@ interface RawData {
   /** m: footprint only seen by satellite (no OSM outline); u: OSM outline no satellite footprint matches; q: 2 low confidence */
   buildings: { p: number[]; h?: number; n?: string; i?: number[][]; m?: 1; u?: 1; q?: 2 }[];
   areas: { k: string; p: number[] }[];
-  places: { n: string; k: string; x: number; z: number; l?: string[]; q?: 1 | 2 }[];
+  places: { n: string; k: string; x: number; z: number; l?: string[]; a?: string[]; q?: 1 | 2 }[];
   lines: Record<string, string[]>;
   /** destination access registry (data/geography/legon-access.geojson): e entrance (dm), a arrival node, d drop-off node, t type, f facing (deg), q confidence, b secondary entrances (dm) */
   access: { n: string; e: [number, number]; a: number; d?: number; t: string; f: number; q?: 1 | 2; s: string; v?: number[]; fp?: number[]; b?: number[] }[];
@@ -106,6 +106,8 @@ const PULL_BACK: [number, number][] = [[-787.0, 104.9], [-823.6, 75.3]];
   }
 }
 export const AREAS: Area[] = data.areas.map((a) => ({ kind: a.k as Area['kind'], pts: Float32Array.from(a.p, (v) => v / 10) }));
+/** the campus outline (the blue boundary of the UG Campus Map reference): x, z pairs in metres */
+export const CAMPUS_BOUNDARY: [number, number][] = Array.from({ length: data.boundary.length / 2 }, (_, i) => [data.boundary[2 * i] / 10, data.boundary[2 * i + 1] / 10]);
 export const PLACES: Place[] = data.places.map((p) => ({ name: p.n, kind: p.k as PlaceKind, x: p.x / 10, z: p.z / 10, ...(p.l && { lines: p.l }) }));
 /** trotro line ref -> the places it runs between */
 export const LINE_ENDS = data.lines;
@@ -221,6 +223,8 @@ const ENTRIES = [
     const place = placeByName(name);
     return place ? [{ key: fold(alias), place, alias }] : [];
   }),
+  // the UG Campus Map's own titles for places the map knows by another name (Department of History for Dep't of History)
+  ...data.places.flatMap((p, i) => (p.a ?? []).map((alias) => ({ key: fold(alias), place: PLACES[i], alias }))),
 ];
 const KIND_RANK: Record<PlaceKind, number> = { landmark: 0, hall: 1, academic: 2, food: 3, health: 3, sport: 4, worship: 4, bank: 5, transport: 6, other: 7 };
 

@@ -4,7 +4,8 @@
 // mapped outlines and roads (the N4's two carriageways, La-Bawaleshi Road, the road the game names Mbabane Avenue
 // that the aerials call McDan Drive); every height, every span the map has no outline for and every plant's place is
 // read from the street photographs, not measured, and stays a number here to adjust.
-// (No imports: relief.ts reads the banks from here.)
+// (relief.ts reads the banks from here: the only import is the junction's plan, which imports nothing of the relief.)
+import { westEdge } from './okjplan';
 
 type Line = [number, number][];
 /** the N4's southbound (west) carriageway's centre line, north and south of the junction (the mapped one-way ways) */
@@ -36,8 +37,10 @@ export const BANKS = {
   south: { line: WEST_S, z0: 1296, z1: 1418, ends: 8, face: 4.5, h: 0.85, rise: 0.3, riseTo: 10, back: 21, fall: 4 },
 };
 export type Bank = typeof BANKS.north;
-/** the x of a bank's face at z (the kerb of the southbound carriageway less the path) */
-export const bankFace = (b: Bank, z: number) => xAt(b.line, z) - W_HALF - b.face;
+/** the x of a bank's face at z (the kerb of the southbound carriageway less the path). Where the junction's correction
+ *  (okjplan.ts, 2026-10-16) puts the kerb farther out (zone 1's widening, zone 5's concrete bay), the face keeps its
+ *  distance from the new kerb, so neither the stone nor the raised ground reaches the road */
+export const bankFace = (b: Bank, z: number) => Math.min(xAt(b.line, z) - W_HALF - b.face, westEdge(z) - (b.face - 1.2));
 /** the bank's top at x, z (on the top: from its face back) */
 export const bankTop = (b: Bank, x: number, z: number) => b.h + b.rise * Math.min(1, Math.max(0, bankFace(b, z) - x) / b.riseTo);
 

@@ -16,6 +16,7 @@ import { deckAt } from './cutplan';
 import { RoadEdges, edgeLift, onEdges } from './roadedges';
 import { SOLIDS } from './solids';
 import { Surfaces, onHardSurface } from './surfaces';
+import { vegetationBlocked } from './vegrules';
 import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
 import { AREAS, buildingAt, buildingNear, mapBounds, roadAt } from './campusmap';
 import { inPassage, solidAt } from './solids';
@@ -303,7 +304,7 @@ function freeBlocked(x: number, z: number) {
   if (onEdges(x, z)) return false;
   // trunks, posts and what the models draw at bike height (walls, fences, parked cars, planters) stop it everywhere,
   // on the roads too; the map's building outlines only off the roads (some reach a little over a road's edge)
-  if (solidAt(x, z, 0.3) || (meshBlocked(x, z) && !nearCleared(x, z))) return true;
+  if ((solidAt(x, z, 0.3) || meshBlocked(x, z)) && !nearCleared(x, z)) return true;
   if (roadClearance(x, z, 6, -1, true) <= 0) return false;
   if (buildingNear(x, z, 0.35) && !inPassage(x, z)) return true;
   if (!wilds) {
@@ -317,15 +318,15 @@ function freeBlocked(x: number, z: number) {
 }
 let bounds: ReturnType<typeof mapBounds> | null = null;
 
-/** where the campus's trees and shrubs were left out (on the widened roads, the sidewalks and the corrected hard
- *  surfaces): their trunks are still in the collision raster, which the free ride then ignores within 0.8 m */
+/** where the campus's trees and plants were left out (on hard ground, vegrules.ts): their trunks are still in the
+ *  collision raster and the round solids, which the free ride then ignores within 1.3 m */
 const cleared = new Map<number, number[]>();
 const ckey = (x: number, z: number) => (Math.floor(x / 8) + 4096) * 8192 + (Math.floor(z / 8) + 4096);
 function clear(x: number, z: number) { const k = ckey(x, z); let l = cleared.get(k); if (!l) cleared.set(k, (l = [])); l.push(x, z); }
 function nearCleared(x: number, z: number) {
   for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
     const l = cleared.get(ckey(x + i * 8, z + j * 8));
-    if (l) for (let k = 0; k < l.length; k += 2) if (Math.hypot(l[k] - x, l[k + 1] - z) < 0.8) return true;
+    if (l) for (let k = 0; k < l.length; k += 2) if (Math.hypot(l[k] - x, l[k + 1] - z) < 1.3) return true;
   }
   return false;
 }
@@ -505,9 +506,8 @@ export class Game {
     this.engine.world.addChild(this.scene.entity);
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
     this.campus = new Campus(this.engine);
-    // the campus's trees and posts that would stand in the widened roads and their sidewalks are left out (roadedges.ts)
-    // (and so are those on the corrected car parks, plazas and paths, surfaces.ts)
-    this.campus.dropInstance = (x, z) => { const drop = onEdges(x, z, 0.4) || onHardSurface(x, z); if (drop) clear(x, z); return drop; };
+    // the campus's trees and plants on hard ground are left out (vegrules.ts), with their trunks' solids
+    this.campus.dropInstance = (x, z) => { const drop = vegetationBlocked(x, z); if (drop) clear(x, z); return drop; };
     // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
     nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
 
@@ -1574,7 +1574,7 @@ export class Game {
         // respawn: spread around at first, later far ahead where it can't pop into view
         const d = this.d + (spread ? -20 + Math.random() * 200 : 90 + Math.random() * 110);
         // (on the sidewalk: past the lip and the gutter, roadedges.ts)
-        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF * 1.5 + 1.3 + Math.random() * 1.3);
+        const x = (Math.random() < 0.5 ? -1 : 1) * (ROAD_HALF + 0.4 + Math.random() * 1.0);
         const p = this.pose(d, x);
         if (d >= end || d < -this.route.lead + 2 || buildingAt(p.x, p.z, 0.6) || this.track.distanceToRoad(p.x, p.z) < ROAD_HALF + 0.3) continue;
         Object.assign(w, { d, x, v: (Math.random() < 0.5 ? -1 : 1) * (1.1 + Math.random() * 0.5), lift: edgeLift(p.x, p.z) });

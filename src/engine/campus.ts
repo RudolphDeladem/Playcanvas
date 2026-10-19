@@ -26,7 +26,7 @@ export class Campus {
   readonly ready: Promise<void>;
   /** lift the ground layers apart (see build); false shows the campus as first converted, for comparisons */
   liftLayers = true;
-  /** instanced parts (trees, posts) left out where this says so: the game's widened roads and sidewalks */
+  /** trees and plants (instanced parts tagged 'crown' or 'plant') left out where this says so: on hard ground */
   dropInstance?: (x: number, z: number) => boolean;
   /** called with 0..1 while the first tiles round the start load */
   onProgress?: (p: number) => void;
@@ -153,6 +153,9 @@ export class Campus {
       if (r.alphaTest > 0) m.alphaTest = r.alphaTest;
     }
     m.cull = r.side === 2 ? pc.CULLFACE_NONE : r.side === 1 ? pc.CULLFACE_FRONT : pc.CULLFACE_BACK;
+    // (a double-sided face seen from its back is lit with its normal turned toward the camera, as three does: the
+    // original's flat areas, car parks among them, are wound either way round and were drawn dark from above)
+    if (r.side === 2) m.twoSidedLighting = true;
     m.depthWrite = r.depthWrite !== false;
     m.depthTest = r.depthTest !== false;
     // three's polygonOffset(factor, units) is GL's polygonOffset(factor, units): PlayCanvas's slope and constant bias
@@ -168,7 +171,8 @@ export class Campus {
 
   /** the original's onBeforeCompile tweak, translated by the converter, appended to the albedo chunk */
   private addSnippet(m: pc.StandardMaterial, shade: Rec) {
-    const code: string = this.manifest.snippets[shade.snippet];
+    // (three's vertex colour varying is PlayCanvas's vVertexColor: the soil's shading reads it, soilground.ts)
+    const code: string = this.manifest.snippets[shade.snippet].replace(/\bvColor\b/g, 'vVertexColor');
     const decl: string[] = [];
     for (const [name, u] of Object.entries(shade.uniforms ?? {}) as [string, Rec][]) {
       if (u.tex != null) { decl.push(`uniform sampler2D ${name};`); m.setParameter(name, this.texture(u.tex)); }
@@ -193,7 +197,7 @@ export class Campus {
     this.setVisible(id, s.visible !== false);
   }
   private hidden = new Set<number>();
-  private setVisible(id: number, on: boolean) {
+  setVisible(id: number, on: boolean) {
     if (on) this.hidden.delete(id); else this.hidden.add(id);
     for (const t of this.loaded.values()) t.root.forEach((e) => { const mi = (e as pc.Entity).render?.meshInstances?.[0] as any; if (mi && mi._matId === id) mi.visible = on; });
   }
@@ -343,9 +347,12 @@ export class Campus {
         // instances grouped by colour (each group a tinted copy of the material): PlayCanvas's instancing carries the
         // matrices only
         const groups = new Map<string, number[]>();
+        // (the grass tufts are not drawn: the owner had them removed from the game, 2026-10-18)
+        const tag = this.manifest.materials[h.m]?.tag as string | undefined, veg = tag === 'crown' || tag === 'plant', sh = tag === 'plant' ? 5 : 3;
         for (let i = 0; i < h.n; i++) {
-          if (this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14])) continue;
-          const k = `${icol[i * 4] >> 3},${icol[i * 4 + 1] >> 3},${icol[i * 4 + 2] >> 3}`;
+          if (tag === 'tuft' || (veg && this.dropInstance?.(mats[i * 16 + 12], mats[i * 16 + 14]))) continue;
+          // (the plants' shades in coarser steps: fewer tinted copies, fewer draws)
+          const k = `${icol[i * 4] >> sh},${icol[i * 4 + 1] >> sh},${icol[i * 4 + 2] >> sh}`;
           let l = groups.get(k); if (!l) groups.set(k, (l = [])); l.push(i);
         }
         const mesh = new pc.Mesh(dev);

@@ -15,10 +15,12 @@
 import { buildCampus, lampGlow } from '/orig/src/game/world.ts';
 import { buildLandmarks } from '/orig/src/game/landmarks.ts';
 import { inLandmark, setNightLights } from '/orig/src/game/life.ts';
-import { SOLIDS, PASSAGES } from '/orig/src/game/solids.ts';
+import { SOLIDS, PASSAGES, OPASSAGES } from '/orig/src/game/solids.ts';
 import { meshBlocked } from '/orig/src/game/meshcollide.ts';
 import { onEarth } from '/orig/src/game/science.ts';
 import { mapBounds } from '/orig/src/game/campusmap.ts';
+import { loadKenneyCars } from '/orig/src/game/kenneycars.ts';
+import { dropHiddenFaces } from '/orig/src/game/memory.ts';
 import { MeshoptSimplifier } from 'meshoptimizer';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -110,13 +112,19 @@ async function captureShader(m: Any) {
     const a = sh.vertexShader.match(new RegExp(`\\b${name}\\s*=\\s*([^;]+);`));
     const expr = a ? a[1] : '';
     let rep = 'vPositionW';
-    if (/objectNormal|normal/.test(expr)) rep = 'normalize(vNormalW)';
+    // (a float attribute of the geometry's own, the soil's coverage: carried in the vertex colour's alpha, see the
+    // chunk pass)
+    if (/^\s*soil\s*$/.test(expr)) rep = 'vVertexColor.a';
+    else if (/objectNormal|normal/.test(expr)) rep = 'normalize(vNormalW)';
     else { const sw = expr.match(/\)\s*\.(xyz|xz|xy|y|x|z)\s*$/) || expr.match(/position\.(xyz|xz|xy|y|x|z)/); rep = sw ? `vPositionW.${sw[1]}` : 'vPositionW'; }
     vary.set(name, rep);
   }
-  let code = sh.fragmentShader.split('\n').filter((l: string) => !/^\s*(#include|varying|uniform)\b/.test(l)).join('\n');
+  // (a shader that drops <color_fragment> uses its vertex colours for something else, not as a tint: PlayCanvas's tint
+  // undone first)
+  const untint = !sh.fragmentShader.includes('#include <color_fragment>') && m.vertexColors ? 'dAlbedo /= max(vVertexColor.rgb, vec3(0.02));\n' : '';
+  let code = untint + sh.fragmentShader.split('\n').filter((l: string) => !/^\s*(#include|varying|uniform)\b/.test(l)).join('\n');
   for (const [n, r] of vary) code = code.replace(new RegExp(`\\b${n}\\b`, 'g'), r);
-  code = code.replace(/diffuseColor\.rgb/g, 'dAlbedo').replace(/\bvViewPosition\b/g, '(vPositionW - view_position)');
+  code = code.replace(/\bvColor\b/g, 'vVertexColor').replace(/diffuseColor\.rgb/g, 'dAlbedo').replace(/\bvViewPosition\b/g, '(vPositionW - view_position)');
   const uniforms: Any = {};
   for (const [n, u] of Object.entries(sh.uniforms) as [string, Any][]) {
     const v = u.value;
@@ -145,7 +153,7 @@ async function materialId(m: Any): Promise<number> {
     fog: m.fog !== false, toneMapped: m.toneMapped !== false, visible: m.visible,
     map: await tex(m.map), emissiveMap: await tex(m.emissiveMap), alphaMap: await tex(m.alphaMap),
     shade: await captureShader(m), key: m.customProgramCacheKey ? String(m.customProgramCacheKey()).slice(0, 80) : undefined,
-    tag: m === lampGlow.head ? 'lampHead' : m === lampGlow.pool ? 'lampPool' : undefined,
+    tag: m === lampGlow.head ? 'lampHead' : m === lampGlow.pool ? 'lampPool' : m.userData?.lrTag,
   };
   const id = materials.length;
   materials.push(d);
@@ -339,20 +347,139 @@ async function writeTile(key: string, parts: { head: Any; bufs: ArrayBufferView[
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// the original's batched plants and painted cars, as plain instanced batches
+// ---------------------------------------------------------------------------------------------------------------
+/** the plants' full shape nearer than this, their simple shape further off (vegetation/instances.ts NEAR_PLANT) */
+const NEAR_PLANT = 110;
+/** a BatchedMesh's geometry `id` as a geometry of its own (cached per batch) */
+const subGeos = new WeakMap<Any, Map<number, Any>>();
+function subGeometry(bm: Any, id: number) {
+  let cache = subGeos.get(bm);
+  if (!cache) subGeos.set(bm, (cache = new Map()));
+  if (cache.has(id)) return cache.get(id);
+  const src = bm.geometry, r = bm.getGeometryRangeAt(id);
+  const g = new src.constructor();
+  for (const [name, a] of Object.entries(src.attributes) as [string, Any][]) {
+    const s = a.itemSize;
+    g.setAttribute(name, new a.constructor(a.array.slice(r.vertexStart * s, (r.vertexStart + r.vertexCount) * s), s, a.normalized));
+  }
+  const ix = src.index.array.slice(r.indexStart, r.indexStart + r.indexCount);
+  for (let i = 0; i < ix.length; i++) ix[i] -= r.vertexStart;
+  g.setIndex(new src.index.constructor(ix, 1));
+  g.computeBoundingBox(); g.computeBoundingSphere();
+  cache.set(id, g);
+  return g;
+}
+/** an instanced batch as the converter reads one (visit, the chunk pass, finishInst): the source's place in the world,
+ *  this geometry, material, per-instance matrices and colours */
+function instancedLike(like: Any, geo: Any, mat: Any, mats: Float32Array, cols: Float32Array | null) {
+  if (!geo.boundingBox) geo.computeBoundingBox();
+  return { lrPlant: !!like.isBatchedMesh, isMesh: true, isInstancedMesh: true, visible: true, children: [], geometry: geo, material: mat, count: mats.length / 16, instanceMatrix: { array: mats }, instanceColor: cols ? { array: cols } : null, matrixWorld: like.matrixWorld, renderOrder: like.renderOrder };
+}
+/** vegetation/instances.ts draws every plant as one BatchedMesh, switching each between its kind's full and far shape
+ *  by distance. Here each kind becomes two instanced batches: the full shape within NEAR_PLANT, the far one beyond.
+ *  (flushPlants adds the kinds' full shapes first, one per kind in order, then places each kind's plants in turn in
+ *  its far shape: the n-th run of plants is the n-th kind, whose full shape is geometry n.) */
+function unbatch(bm: Any): [Any, number][] {
+  const n = bm.instanceCount;
+  const M = new bm.matrixWorld.constructor(), C = new bm.material.color.constructor();
+  const runs: { far: number; near: number; ids: number[] }[] = [];
+  for (let id = 0; id < n; id++) {
+    const g = bm.getGeometryIdAt(id);
+    if (!runs.length || runs[runs.length - 1].far !== g) runs.push({ far: g, near: runs.length, ids: [] });
+    runs[runs.length - 1].ids.push(id);
+  }
+  // (a kind without a far shape uses its full one for both: its run's geometry is its own index)
+  const ok = runs.every((r) => r.far >= runs.length || r.far === r.near);
+  if (!ok) console.log('[x] plants: unexpected batch layout, far shapes only');
+  const near = lodIndex(0, NEAR_PLANT), far = lodIndex(NEAR_PLANT, Infinity);
+  const out: [Any, number][] = [];
+  for (const r of runs) {
+    const mats = new Float32Array(r.ids.length * 16), cols = new Float32Array(r.ids.length * 3);
+    r.ids.forEach((id, k) => { bm.getMatrixAt(id, M); mats.set(M.elements, k * 16); bm.getColorAt(id, C); cols[k * 3] = C.r; cols[k * 3 + 1] = C.g; cols[k * 3 + 2] = C.b; });
+    if (!ok || r.far === r.near) { out.push([instancedLike(bm, subGeometry(bm, r.far), bm.material, mats, cols), 0]); continue; }
+    out.push([instancedLike(bm, subGeometry(bm, r.near), bm.material, mats, cols), near]);
+    out.push([instancedLike(bm, subGeometry(bm, r.far), bm.material, mats, cols), far]);
+  }
+  log('plants', n, 'kinds', runs.length);
+  return out;
+}
+/** kenneycars.ts paints each car's body triangles per instance in its shader (iPaint, paintGain) over the kit's colour
+ *  map. Here the paint is baked: per paint, the model's triangles take vertex colours, the map's texel for each, or the
+ *  paint shaded by the texel's brightness on the body, exactly as the shader does; drawn with a plain material. */
+let carMat: Any = null;
+const paintGeos = new WeakMap<Any, Map<string, Any>>();
+let carPx: { d: Uint8ClampedArray; w: number; h: number } | null = null;
+const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+function unpaint(im: Any): Any[] {
+  const mat = im.material, geo = im.geometry;
+  carMat ??= new mat.constructor({ vertexColors: true, roughness: mat.roughness, metalness: mat.metalness, name: 'kenney-car' });
+  if (!carPx) {
+    const img = mat.map.image, cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    const g = cv.getContext('2d', { willReadFrequently: true })!;
+    g.drawImage(img, 0, 0);
+    carPx = { d: g.getImageData(0, 0, cv.width, cv.height).data, w: cv.width, h: cv.height };
+  }
+  const px = carPx;
+  const texel = (u: number, v: number) => {
+    const x = Math.min(px.w - 1, Math.max(0, Math.floor(u * px.w))), y = Math.min(px.h - 1, Math.max(0, Math.floor(v * px.h))), i = (y * px.w + x) * 4;
+    return [lin(px.d[i] / 255), lin(px.d[i + 1] / 255), lin(px.d[i + 2] / 255)];
+  };
+  const paint = geo.attributes.iPaint.array as Float32Array;
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < im.count; i++) { const k = `${paint[i * 3]},${paint[i * 3 + 1]},${paint[i * 3 + 2]}`; const l = groups.get(k) ?? []; l.push(i); groups.set(k, l); }
+  const out: Any[] = [];
+  for (const [key, ids] of groups) {
+    let byPaint = paintGeos.get(geo.attributes.position);
+    if (!byPaint) paintGeos.set(geo.attributes.position, (byPaint = new Map()));
+    let g = byPaint.get(key);
+    if (!g) {
+      const [pr, pg, pb] = key.split(',').map(Number);
+      const P = geo.attributes.position, N = geo.attributes.normal, UV = geo.attributes.uv, PG = geo.attributes.paintGain;
+      const col = new Float32Array(P.count * 3);
+      for (let t = 0; t < P.count / 3; t++) {
+        const u = (UV.getX(t * 3) + UV.getX(t * 3 + 1) + UV.getX(t * 3 + 2)) / 3, v = (UV.getY(t * 3) + UV.getY(t * 3 + 1) + UV.getY(t * 3 + 2)) / 3;
+        let c = texel(u, v);
+        const gain = PG.getX(t * 3);
+        if (gain > 0 && pr >= 0) { const s = Math.min(1.35, Math.max(0.55, (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) * gain)); c = [Math.min(1, pr * s), Math.min(1, pg * s), Math.min(1, pb * s)]; }
+        for (let k = 0; k < 3; k++) col.set(c, (t * 3 + k) * 3);
+      }
+      g = new geo.constructor();
+      g.setAttribute('position', P);
+      g.setAttribute('normal', N);
+      g.setAttribute('color', new P.constructor(col, 3));
+      g.computeBoundingBox(); g.computeBoundingSphere();
+      byPaint.set(key, g);
+    }
+    const mats = new Float32Array(ids.length * 16);
+    ids.forEach((i, k) => mats.set(im.instanceMatrix.array.subarray(i * 16, i * 16 + 16), k * 16));
+    out.push(instancedLike(im, g, carMat, mats, null));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // the run
 // ---------------------------------------------------------------------------------------------------------------
 async function run() {
   const T0 = performance.now();
+  // (the parked cars are the Car Kit's models: loaded first, so the campus build draws them at once)
+  log('car models', await loadKenneyCars());
   log('building the original campus');
   const roots = [buildCampus(), buildLandmarks()];
   for (const r of roots) r.updateMatrixWorld(true);
-  log('built in', Math.round(performance.now() - T0), 'ms');
+  // (the faces lying on the ground, turned down, as the game drops them: memory.ts)
+  log('built in', Math.round(performance.now() - T0), 'ms; hidden faces dropped', dropHiddenFaces(roots[0]));
 
   // every drawn mesh, its level-of-detail range and world bounds
   const recs: Rec[] = [];
   const v3 = (e: Any, x: number, y: number, z: number) => [e[0] * x + e[4] * y + e[8] * z + e[12], e[1] * x + e[5] * y + e[9] * z + e[13], e[2] * x + e[6] * y + e[10] * z + e[14]];
   const visit = (o: Any, lod: number) => {
     if (!o.visible) return;
+    // (the batched plants and the painted cars become plain instanced batches first: see unbatch, unpaint)
+    if (o.isBatchedMesh) { for (const [im, l] of unbatch(o)) visit(im, l); return; }
+    if (o.isInstancedMesh && o.geometry.attributes.iPaint) { for (const im of unpaint(o)) visit(im, lod); return; }
     if (o.isLOD) {
       o.levels.forEach((l: Any, i: number) => visit(l.object, lodIndex(l.distance, o.levels[i + 1]?.distance ?? Infinity)));
       return;
@@ -382,6 +509,15 @@ async function run() {
   };
   for (const r of roots) visit(r, 0);
   log('meshes', recs.length);
+  // (the vegetation's materials tagged for the game: 'crown' and 'plant' are kept off hard ground, 'tuft' is the grass
+  // tufts the owner had removed, 2026-10-18; crowns.ts draws its crowns, trunks and tufts under an LOD named 'crowns')
+  for (const r of recs) {
+    const m = r.mesh;
+    if (m.material?.name === 'kenney-car') continue;
+    if (m.lrPlant) m.material.userData.lrTag = 'plant';
+    else if (m.isInstancedMesh && m.parent?.parent?.name === 'crowns') m.material.userData.lrTag = m.material.side === 2 ? 'tuft' : 'crown';
+  }
+  if (q.get('only') === 'passages') { await exportPassages(); (window as Any).__stats = { ms: Math.round(performance.now() - T0) }; (window as Any).__done = true; return; }
   if (q.get('only') === 'landmark') { await exportLandmark(); (window as Any).__stats = { ms: Math.round(performance.now() - T0) }; (window as Any).__done = true; return; }
 
   // materials (day state), then their night state
@@ -441,6 +577,8 @@ async function run() {
         const needUV1 = !!(mat.emissiveMap && mat.emissiveMap.channel === 1) && !!UV1;
         const hasN = !!N && mat.type !== 'MeshBasicMaterial';
         const hasC = !!mat.vertexColors && !!C;
+        // (the soil's coverage, a float attribute, rides in the colour's alpha: soilground.ts)
+        const SOIL = g.attributes.soil;
         for (let t = rg.s; t + 2 < rg.s + rg.c; t += 3) {
           const i0 = index ? index.getX(t) : t, i1 = index ? index.getX(t + 1) : t + 1, i2 = index ? index.getX(t + 2) : t + 2;
           for (const [v, out] of [[i0, pa], [i1, pb], [i2, pc]] as [number, Float32Array][]) {
@@ -459,7 +597,7 @@ async function run() {
             if (hasN) { const x = N.getX(v), y = N.getY(v), z = N.getZ(v); bk!.nr.push3(nm[0] * x + nm[3] * y + nm[6] * z, nm[1] * x + nm[4] * y + nm[7] * z, nm[2] * x + nm[5] * y + nm[8] * z); }
             if (needUV) bk!.t.push2(UV.getX(v), UV.getY(v));
             if (needUV1) bk!.t1.push2(UV1.getX(v), UV1.getY(v));
-            if (hasC) { bk!.cl.push3(C.getX(v), C.getY(v), C.getZ(v)); bk!.cl.push(C.itemSize > 3 ? C.getW(v) : 1); }
+            if (hasC) { bk!.cl.push3(C.getX(v), C.getY(v), C.getZ(v)); bk!.cl.push(SOIL ? SOIL.getX(v) : C.itemSize > 3 ? C.getW(v) : 1); }
           });
         }
       }
@@ -526,7 +664,7 @@ async function exportData(recs: Rec[]) {
   const sol: number[] = [];
   for (const list of (SOLIDS as Any).cells.values()) for (const [x, z, r] of list) sol.push(x, z, r);
   log('solids', sol.length / 3, 'bytes', await put('solids.lrz', new Float32Array(sol), true));
-  await put('passages.json', JSON.stringify(PASSAGES));
+  await exportPassages();
 
   // the earth tracks (rougher, slower free riding), 1 m cells in 64 m tiles where any
   const b0 = mapBounds(), ET = 64;
@@ -546,6 +684,13 @@ async function exportData(recs: Rec[]) {
   eBits.forEach((b, k) => eb.set(b, eh.byteLength + k * b.length));
   log('earth tiles', eBits.length, 'bytes', await put('earth.lrz', eb, true));
   await exportLandmark();
+}
+
+/** the open passages through buildings: square ones (solids.ts PASSAGES) and those along a line at any angle (the
+ *  halls' gateways, OPASSAGES) */
+async function exportPassages() {
+  await put('passages.json', JSON.stringify(PASSAGES));
+  log('angled passages', OPASSAGES.length, 'bytes', await put('opassages.json', JSON.stringify(OPASSAGES)));
 }
 
 /** the landmark models' keep-outs (Campus Life keeps its guests and props off them): 0.5 m cells in 64 m tiles, only

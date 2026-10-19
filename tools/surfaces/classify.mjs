@@ -129,14 +129,27 @@ for (const e of out) {
 // 2026-10-18): the map's polygon is broader than the paved part, and the site the original modelled there shows the
 // real layout, so they are left as modelled and listed for review (map and model disagree)
 const DECISIONS = {
-  'osm:way/1533364970': 'UPSA: the OSM car park covers the whole compound; the modelled ground is patchy grass and bare earth with marked bay strips (upsagreen); conflict left for review',
-  'osm:way/1533364971': 'UPSA: as above, a marked bay strip inside grass and bare earth',
-  'osm:way/1533364973': 'UPSA: as above',
-  'osm:way/1533364979': 'UPSA: as above',
-  'osm:way/1533364980': 'UPSA: as above',
-  'osm:way/320067568': 'Balme Library fountain: the polygon takes in the lawns either side of the pool; the paved surround and the lawns are modelled as they are',
-  'osm:way/702279064': 'a bare-earth car park, modelled brown; the green is the lawn at the polygon\'s edges',
-  'osm:way/765261443': 'Games Arena: lawns, paved paths and a court, as modelled; the polygon takes them all in',
+  // UPSA: OSM maps car parks over the whole compound; the original models it (upsagreen, the owner's UPSA evidence
+  // audit) as patchy grass and bare earth with marked bay strips: map and model disagree, nothing drawn over the model
+  'osm:way/1533364968': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364969': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364970': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364971': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364972': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364973': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364974': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364978': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364979': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/1533364980': 'OWNER REVIEW: UPSA: OSM car park, modelled by the original as grass and bare earth with bay strips',
+  'osm:way/320067568': 'OWNER REVIEW: Balme Library fountain: the polygon takes in the lawns either side of the pool; the paved surround and the lawns are modelled as they are',
+  'osm:way/702279064': 'OWNER REVIEW: a car park modelled as bare earth; the green is the lawn at the polygon\'s edges',
+  'osm:way/765261443': 'Games Arena: lawns, paved paths and a court, as modelled (green 0.58 -> 0.21 after the original\'s update)',
+};
+/** lines the original's update of 2026-10-18 redrew in another surface than their OSM tag: the newer work (the owner's
+ *  briefs) is kept, the conflict listed for review */
+const SYNCED = {
+  'osm:way/634956633': 'OWNER REVIEW: tagged earth (OSM), now drawn as light concrete by the original\'s update; left as the original draws it',
+  'osm:way/758602540': 'OWNER REVIEW: tagged asphalt footway (OSM), now drawn as light concrete by the original\'s update; left as the original draws it',
 };
 for (const e of out) if (DECISIONS[e.id]) { e.fix = false; e.review = DECISIONS[e.id]; }
 
@@ -157,6 +170,7 @@ const CONFLICTS = {
   'osm:way/340246848': 'as osm:way/340246934: under a through road mapped on the same line',
 };
 for (const e of out) if (CONFLICTS[e.id]) e.review = CONFLICTS[e.id];
+for (const e of out) if (SYNCED[e.id]) { e.fix = false; e.review = SYNCED[e.id]; }
 // the rest of what still renders in another colour after correction (tools/surfaces/audit-after.json), each looked at
 const NOTES = {
   'osm:way/1533364968': 'UPSA: OSM car park over the compound; modelled as bare earth and bay strips (upsagreen): map and model disagree',

@@ -56,6 +56,8 @@ nothing was invented.
 
 ## Corrections in this version (not in the original)
 
+**2026-10-19, synchronised with the original (`dc022c1`) and held to the map's evidence**: the campus reconverted with the original's Pent, Evandy, TF and Bani work; roads back at the map's widths; sidewalks only where the map shows one; the grass tufts gone and no trees on hard ground; double-sided ground and roofs lit as in the original. See [`SURFACES_REPORT.md`](SURFACES_REPORT.md).
+
 **2026-10-19, ground surfaces**: the campus's mapped ground is classified from the evidence (car parks, pavers, earth, gravel, concrete, plazas, lawns), and the car parks that rendered as grass and the paver lanes that rendered as asphalt are corrected. See [`SURFACES_REPORT.md`](SURFACES_REPORT.md).
 
 **2026-10-18, the owner's road corrections** (photos of campus roads and sidewalks) — `src/game/roadedges.ts`:

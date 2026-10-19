@@ -6,8 +6,9 @@ import { SKIES, type TimeOfDay } from '../../src/engine/sky';
 import { Campus } from '../../src/engine/campus';
 import { groundHeight } from '../../src/game/relief';
 import * as THREE from '../../src/engine/lite3';
-import { Surfaces, onHardSurface } from '../../src/game/surfaces';
-import { RoadEdges, onEdges } from '../../src/game/roadedges';
+import { Surfaces } from '../../src/game/surfaces';
+import { RoadEdges, SIDEWALK_STATS, sidewalkSegments } from '../../src/game/roadedges';
+import { VEG_DROPS, vegetationBlocked } from '../../src/game/vegrules';
 import { loadCollision } from '../../src/game/collision';
 
 const q = new URLSearchParams(location.search);
@@ -31,7 +32,7 @@ if (game) {
   surfaces = new Surfaces();
   edges = new RoadEdges();
   scene.add(surfaces.group, edges.group);
-  campus.dropInstance = (x, z) => onEdges(x, z, 0.4) || onHardSurface(x, z);
+  campus.dropInstance = vegetationBlocked;
 }
 const cam = e.camera;
 cam.camera!.fov = fov || 55;
@@ -51,6 +52,9 @@ e.app.on('update', () => {
   await campus.preload(x, z, Math.min(r, campus.radius));
   // let textures arrive and a few frames draw
   await new Promise((res) => setTimeout(res, +(q.get('settle') ?? 2500)));
-  (window as any).__stats = { ...campus.stats, drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
+  // ?hide=id,id: those materials not drawn (checks)
+  for (const id of (q.get('hide') ?? '').split(',').filter(Boolean)) campus.setVisible(+id, false);
+  if (q.get('sidewalks') === '1') (window as any).__sidewalks = sidewalkSegments();
+  (window as any).__stats = { ...campus.stats, ...(game ? { sidewalks: SIDEWALK_STATS, veg: VEG_DROPS } : {}), drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
   (window as any).__done = true;
 })();

@@ -19,6 +19,11 @@ import { onEarthTrack } from './ghlplan';
 const BANI_COURTS: [number, number, number, number][] = [[770, 815, -1307.2, -1289.6], [772, 815, -1248.2, -1230.8]];
 /** in one of Bani Hostel's paved courts (the drive through them is pavers, not asphalt: bani.ts draws them) */
 const inBaniCourt = (x: number, z: number) => BANI_COURTS.some(([x0, x1, z0, z1]) => x > x0 && x < x1 + 0.5 && z > z0 && z < z1);
+/** inside Bani Hostel's grounds, south of its roadside wall (the owner, 2026-10-18: no asphalt anywhere in Bani, only
+ *  pavements or red earth): its lane and drives are brick (baniservice.ts, bani.ts), the track to Mr Wu's red earth */
+const inBaniGrounds = (x: number, z: number) => x > 740 && x < 870 && z > -1345 && z < -1201.9;
+/** (the same, kept clear of kerbs, verges and lamps: up to 6 m round it stops short of the road along the front) */
+const BANI_GROUNDS: [number, number, number, number][] = [[770, 870, -1345, -1208]];
 import { inEngForecourt, onEngTrack } from './engplan';
 import { onDeckWalk } from './cutplan';
 import { inEvandy } from './evandyplan';
@@ -77,7 +82,7 @@ export const SC_VIEWS: { name: string; eye: [number, number, number]; look: [num
 
 /** a mapped road drawn as earth or brick here, not asphalt */
 // (and the worn earth tracks behind the Great Hall and round the tennis complex: ghlplan.ts, ghlandscape.ts paints them)
-export const offAsphalt = (x: number, z: number, pad = 0) => [...SC.earth, ...SC.brick, EN.earthBox, ...PAVED_BOXES, ...FS_PAVED, ...GH_PAVED].some(([x0, x1, z0, z1]) => x > x0 - pad && x < x1 + pad && z > z0 - pad && z < z1 + pad) || inWestStrip(x, z) || (pad === 0 && (inEngForecourt(x, z) || onDeckWalk(x, z) || inEvandy(x, z) || inBaniCourt(x, z) || inDjForecourt(x, z))) || (pad === 0 && (onEarthTrack(x, z) || onEngTrack(x, z) || onEarthWest(x, z)));
+export const offAsphalt = (x: number, z: number, pad = 0) => [...SC.earth, ...SC.brick, EN.earthBox, ...PAVED_BOXES, ...FS_PAVED, ...GH_PAVED, ...BANI_GROUNDS].some(([x0, x1, z0, z1]) => x > x0 - pad && x < x1 + pad && z > z0 - pad && z < z1 + pad) || inWestStrip(x, z) || (pad === 0 && (inEngForecourt(x, z) || onDeckWalk(x, z) || inEvandy(x, z) || inBaniCourt(x, z) || inBaniGrounds(x, z) || inDjForecourt(x, z))) || (pad === 0 && (onEarthTrack(x, z) || onEngTrack(x, z) || onEarthWest(x, z)));
 /** on the red-earth footpath west of the JQB's south lawn (EN.earthWest) */
 export function onEarthWest(x: number, z: number, pad = 0) {
   const E = EN.earthWest;
@@ -92,5 +97,8 @@ export function onEarthWest(x: number, z: number, pad = 0) {
 export const onEarth = (x: number, z: number) => [...SC.earth, EN.earthBox].some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1) || inWestStrip(x, z) || onEarthTrack(x, z) || onEarthWest(x, z);
 
 /** modelled paved ground where no grass tufts grow (the Frank Torto passage up to its stone wall) */
-export const PAVED: [number, number, number, number][] = [[203.5, 223.9, -137.0, -78]];
+export const PAVED: [number, number, number, number][] = [[203.5, 223.9, -137.0, -78],
+  // the paving round the Balme Library (the owner's Balme Library audit, C16, C26: no grass on intact paving): the car
+  // parks south and south-west of it, CEDI's car park, the forecourt, the square and the pool, the Bookshop's forecourt
+  [-80, -12, 11.8, 19], [-82, -46, 22.5, 32.5], [-132.8, -95, -27.6, -1.1], [-8, 21, 11.5, 36], [0.7, 15.3, 49, 102.5], [-10.2, -7.2, 40.2, 112], [25.2, 27.4, 40.2, 112], [-10.2, 27.4, 40.2, 48.7], [-10.2, 27.4, 102.3, 112], [32.5, 42.6, 66, 85.5], [-166, -128, 141, 154]];
 export const onPaved = (x: number, z: number) => PAVED.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);

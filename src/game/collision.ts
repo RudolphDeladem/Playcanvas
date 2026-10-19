@@ -6,10 +6,11 @@
 //   collision.lrz  the bike-height raster, 42 m tiles of 0.35 m cells (exactly the original's meshcollide raster)
 //   solids.lrz     round solids: x, z, radius (trunks, palms, posts, greenhouse frames)
 //   passages.json  open passages through buildings' ground floors
+//   opassages.json the halls' gateways: passages along a line at any angle
 //   earth.lrz      the earth tracks, 1 m cells in 64 m tiles
 //   landmark.lrz   the landmark models' footprints, 0.5 m cells in 64 m tiles
 import { fetchz } from '../engine/fetchz';
-import { PASSAGES, SOLIDS } from './solids';
+import { OPASSAGES, PASSAGES, SOLIDS } from './solids';
 
 const tkey = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
 
@@ -45,12 +46,13 @@ let loading: Promise<void> | null = null;
 /** loads every gameplay raster (once); the ride waits for it with the campus */
 export function loadCollision(base = `${import.meta.env.BASE_URL}campus/`) {
   return (loading ??= (async () => {
-    const [c, s, p, e, l] = await Promise.all([
+    const [c, s, p, e, l, op] = await Promise.all([
       fetchz(`${base}collision.lrz`),
       fetchz(`${base}solids.lrz`),
       fetch(`${base}passages.json`).then((r) => r.json() as Promise<[number, number, number, number][]>),
       fetchz(`${base}earth.lrz`),
       fetchz(`${base}landmark.lrz`).catch(() => null),
+      fetch(`${base}opassages.json`).then((r) => (r.ok ? (r.json() as Promise<typeof OPASSAGES>) : [])).catch(() => []),
     ]);
     {
       const h = new Int32Array(c, 0, 4);
@@ -61,6 +63,8 @@ export function loadCollision(base = `${import.meta.env.BASE_URL}campus/`) {
     for (let i = 0; i + 2 < sol.length; i += 3) SOLIDS.add(sol[i], sol[i + 1], sol[i + 2]);
     PASSAGES.length = 0;
     PASSAGES.push(...p);
+    OPASSAGES.length = 0;
+    OPASSAGES.push(...op);
     {
       const h = new Int32Array(e, 0, 2);
       earth = readRaster(e, 2, h[0], 1, 1);

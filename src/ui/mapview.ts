@@ -2,6 +2,7 @@
 // mini map during rides and the north-up route preview in Explore.
 import { AREAS, BUILDINGS, NODE_XZ, PLACES, ROADS, mapBounds, type PlaceKind } from '../game/campusmap';
 import type { Route } from '../game/routes';
+import { okjMapPolys, okjRuns } from '../game/okjplan';
 
 const M_PER_PX = 1.5;
 let base: { canvas: HTMLCanvasElement; x0: number; z0: number } | null = null;
@@ -44,7 +45,10 @@ function campusCanvas() {
     ctx.beginPath();
     for (const r of ROADS) {
       if (r.cls !== cls) continue;
-      r.nodes.forEach((n, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(NODE_XZ[n * 2]), Z(NODE_XZ[n * 2 + 1])));
+      // (the Okponglo junction and the N4 beside it are drawn from their plan below, okjplan.ts: the mapped slip roads
+      // and connectors there are not on the map)
+      for (const run of okjRuns(r, r.nodes.map((n) => [NODE_XZ[n * 2], NODE_XZ[n * 2 + 1]] as [number, number])))
+        run.forEach(([x, z], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(x), Z(z)));
     }
   };
   // edges first, then the fill on top, smallest roads underneath
@@ -65,6 +69,19 @@ function campusCanvas() {
     ctx.lineWidth = WIDTH[cls];
     ctx.stroke();
   }
+  // the Okponglo junction as built: the carriageways with their widenings, the arms, the rounded corners, the
+  // concrete stopping bay (okjplan.ts)
+  const okj = okjMapPolys();
+  const fillPolys = (polys: [number, number][][], fill: string, edge: string) => {
+    const path = (pts: [number, number][]) => { ctx.beginPath(); pts.forEach(([x, z], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(x), Z(z))); ctx.closePath(); };
+    ctx.strokeStyle = edge; ctx.lineWidth = 1.6;
+    for (const pts of polys) { path(pts); ctx.stroke(); }
+    // (each filled on its own: they overlap, and the fill covers the edges inside the union)
+    ctx.fillStyle = fill;
+    for (const pts of polys) { path(pts); ctx.fill(); }
+  };
+  fillPolys(okj.asphalt, ROAD_FILL[0], ROAD_EDGE[0]);
+  fillPolys(okj.bay, '#e6e2d8', '#c9c4b8');
   base = { canvas, x0, z0 };
   return base;
 }

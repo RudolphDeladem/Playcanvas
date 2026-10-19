@@ -3,7 +3,7 @@
 // /__write and writes them under this project only. Nothing is ever written to the original repository.
 import { defineConfig, type Plugin } from 'vite';
 import { resolve, dirname } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 const HERE = resolve(__dirname, '../..');
 const ORIG = resolve(process.env.ORIG ?? resolve(HERE, '../legonrush-world'));
@@ -12,6 +12,13 @@ const OUT = resolve(HERE, process.env.OUT ?? 'public/campus');
 const writer = (): Plugin => ({
   name: 'export-writer',
   configureServer(server) {
+    // the original's car models (kenneycars.ts loads them from the site root), read-only
+    server.middlewares.use('/models/', (req, res, next) => {
+      const file = resolve(ORIG, 'public/models', (req.url ?? '').split('?')[0].replace(/^\/+/, ''));
+      if (!file.startsWith(resolve(ORIG, 'public/models')) || !existsSync(file)) { next(); return; }
+      res.setHeader('Content-Type', file.endsWith('.glb') ? 'model/gltf-binary' : 'application/octet-stream');
+      res.end(readFileSync(file));
+    });
     server.middlewares.use('/__write', (req, res) => {
       const url = new URL(req.url ?? '', 'http://x');
       const rel = url.searchParams.get('path') ?? '';

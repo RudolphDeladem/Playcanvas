@@ -21,19 +21,42 @@ function speckle(ctx: CanvasRenderingContext2D, size: number, count: number, col
   }
 }
 
+/** compacted road asphalt (the owner's ground-surface brief, 2026-10-18: fine and even, not gravel): a mid grey with
+ *  a fine, low-contrast aggregate grain (single texels, ~1 cm at the 6 m repeat, so it averages out smoothly at a
+ *  distance instead of shimmering), a few lighter stone chips, a soft broad mottle, and with `wear` faint tyre lines */
 export const asphaltTexture = (wear = true) =>
-  canvasTexture(256, (ctx, s) => {
-    ctx.fillStyle = '#45474b';
+  canvasTexture(512, (ctx, s) => {
+    ctx.fillStyle = '#4a4c50';
     ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 9000, ['#3a3c40', '#505257', '#5c5e63', '#36383b'], 1.6);
-    // faint tyre wear patches
-    ctx.globalAlpha = 0.06;
+    // the broad mottle: a few large, very faint lighter and darker clouds (tiling, drawn wrapped)
+    for (let i = 0; i < 26; i++) {
+      const x = Math.random() * s, y = Math.random() * s, r = 40 + Math.random() * 110, light = i % 2 === 0;
+      for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) {
+        const g = ctx.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+        g.addColorStop(0, light ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.05)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+      }
+    }
+    // the fine grain: single texels a shade either side of the base
+    for (let i = 0; i < 60000; i++) {
+      ctx.fillStyle = ['#46484c', '#4f5155', '#44464a', '#525458'][i & 3];
+      ctx.fillRect(Math.random() * s, Math.random() * s, 1, 1);
+    }
+    // the odd lighter stone chip, small
+    for (let i = 0; i < 1400; i++) { ctx.fillStyle = 'rgba(150,150,146,0.35)'; ctx.fillRect(Math.random() * s, Math.random() * s, 1, 1); }
+    // faint tyre wear lines
+    ctx.globalAlpha = 0.035;
     for (let i = 0; i < (wear ? 6 : 0); i++) {
       ctx.fillStyle = Math.random() < 0.5 ? '#000' : '#fff';
-      ctx.fillRect(Math.random() * s, 0, 18 + Math.random() * 30, s);
+      ctx.fillRect(Math.random() * s, 0, 30 + Math.random() * 50, s);
     }
     ctx.globalAlpha = 1;
   });
+let CAMPUS_ASPHALT: THREE.CanvasTexture | null = null;
+/** the campus roads' asphalt texture (6 m repeat in world coordinates): one instance, shared by every surface that is
+ *  the same road asphalt (the campus roads, the Pent car parks and drive), so they match exactly */
+export const campusAsphaltTexture = () => (CAMPUS_ASPHALT ??= asphaltTexture(false));
 
 /** Legon grass: olive and yellow-green, with short blade strokes and the odd bare, dusty spot. */
 export const grassTexture = () =>

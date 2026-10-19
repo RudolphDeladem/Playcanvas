@@ -19,7 +19,8 @@ export interface Wing {
   slot?: 'x0' | 'x1';
 }
 // (the ring's roof: weathered salmon-orange tiles in the owner's R04, faded pink on the satellite)
-const ORANGE = '#c4633a', PINK = '#cf8466';
+// (the audit, EV-021: the ring's roof pinker, its own family apart from the orange of Main and Annex A; I03 and the drone)
+const ORANGE = '#c4633a', PINK = '#d68b80';
 export const WINGS: Wing[] = [
   // 1 the lower frontage pair: the main block's two wings either side of the entrance bay (R03, R08, P01-P04)
   { id: 'front-w', quad: [[552.8, -1234.9], [555, -1222.4], [593.8, -1229.2], [591.6, -1241.6]], floors: 4, south: 'balcony', north: 'gallery', ends: 'end', roof: ORANGE, ochre: true, gables: true, slot: 'x0' },
@@ -36,7 +37,9 @@ export const WINGS: Wing[] = [
   // balconies on its end, red perforated-brick ventilation panels on its sides
   { id: 'west-end', quad: [[546.7, -1248.6], [546.7, -1238.6], [559.8, -1238.7], [559.7, -1248.7]], floors: 5, south: 'end', north: 'end', ends: 'balcony', roof: ORANGE },
   // the small link block at the east between the frontage and inner pairs
-  { id: 'east-link', quad: [[633.1, -1236.8], [641, -1236.8], [641.1, -1248.3], [633.2, -1248.4]], floors: 4, south: 'vent', north: 'vent', ends: 'gallery', roof: ORANGE },
+  // (the audit, C12: its red perforated panels withdrawn; the east range now stands against its east face, its court face
+  // plain with a louvred window a bay, provisional)
+  { id: 'east-link', quad: [[633.1, -1236.8], [641, -1236.8], [641.1, -1248.3], [633.2, -1248.4]], floors: 4, south: 'plain', north: 'plain', ends: 'gallery', roof: ORANGE },
 ];
 /** 4 the pink-roof courtyard ring (affiliation unresolved: contextual, no name): plain cream walls, pink hipped roofs
  *  round an open court (M2: the court's outline) */
@@ -57,10 +60,11 @@ export const SHELTER = [596.5, 602, -1206.4, -1204.6] as R4;
 export const SIGN: P2 = [603, -1201];
 /** the oval planting islands in the frontage (R03, R11, R14, P01): centre, half lengths */
 export const ISLANDS: { c: P2; a: number; b: number }[] = [{ c: [579, -1214], a: 4, b: 1.8 }, { c: [556, -1212], a: 3.6, b: 1.6 }, { c: [612, -1213.5], a: 3, b: 1.4 }];
-/** the west yard: grey gravel, the green basketball slab (the mapped pitch, V2 1.56 s, 21.16 s) with its hoop */
-export const YARD = { box: [506, 551, -1284, -1222] as R4, slab: [[514.5, -1273.1], [513, -1245.4], [530.7, -1244.4], [532.2, -1272.1]] as P2[], hoop: [522.3, -1270.5] as P2 };
+/** the west yard: grey gravel, the green basketball slab (the mapped pitch, V2 1.56 s, 21.16 s), a hoop at each end */
+export const YARD = { box: [506, 551, -1284, -1222] as R4, slab: [[514.5, -1273.1], [513, -1245.4], [530.7, -1244.4], [532.2, -1272.1]] as P2[] };
 /** the big tree in the court below the upper pair (V1, M2) and the trees in the narrow inner courts */
-export const TREES: { at: P2; r: number }[] = [{ at: [608, -1279], r: 6.5 }, { at: [596.5, -1250], r: 3.2 }, { at: [575, -1245], r: 2.4 }, { at: [622, -1241], r: 2.4 }];
+// (the reconstruction audit of 2026-10-18: the tree at 596.5, -1250 stood under the Main core, its trunk in the way through)
+export const TREES: { at: P2; r: number }[] = [{ at: [608, -1279], r: 6.5 }, { at: [575, -1245], r: 2.4 }, { at: [622, -1241], r: 2.4 }];
 /** 9 the unfinished open frame north of the compound and its red-earth yard (M2, V1 18.00 s; status uncertain) */
 export const FRAME = { box: [541.4, 561, -1403, -1336.5] as R4, floors: 4, bay: 5 };
 export const RED_YARD = [522, 604, -1415, -1332] as R4;
@@ -99,3 +103,37 @@ export function fit(q: P2[]) {
   for (const [x, z] of q) { const u = (x - cx) * ux + (z - cz) * uz, v = -(x - cx) * uz + (z - cz) * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
   return { c: [cx, cz] as P2, axis: [ux, uz] as P2, x0: u0, x1: u1, z0: v0, z1: v1 };
 }
+
+// ---------- the reconstruction audit of 2026-10-17 (docs/evandy-audit/) ----------
+// The owner's real top view I03 registered on the game map by its roofs (20 wing and ring corners, an affine fit,
+// 1.5 m mean residual): x = 516.98 + 0.11408 px + 0.00046 py, z = -1342.12 + 0.0017 px + 0.11138 py.
+/** the Main block's central tank-bearing strip (C02, C03): the space the four wings' inner ends enclose, a deck below
+ *  the wings' roofs carrying the tanks; I03 traces it as a pinched hexagon from the front entrance (south) to the
+ *  rear court, its corners the wings' own: front-w, inner-w, inner-e, front-e (world, ring order) */
+export const MAIN_DECK: P2[] = [[593.8, -1229.2], [591.6, -1241.6], [590.2, -1246.1], [592.9, -1257.3], [599.5, -1259], [601.8, -1245.3], [603.6, -1241.7], [600.2, -1228.8]];
+/** the tanks on it, each where I03 shows a separate circle (r: the two small ones) */
+export const MAIN_TANKS: [number, number, number][] = [
+  [595.3, -1255.4, 0.9], [598.0, -1255.0, 0.9], [595.5, -1252.0, 0.9], [598.2, -1252.2, 0.9], [595.8, -1249.6, 0.9], [598.5, -1249.5, 0.9],
+  [596.0, -1246.7, 0.9], [598.8, -1246.3, 0.9], [592.1, -1243.7, 0.55], [594.7, -1243.7, 0.9], [598.4, -1243.5, 0.9], [601.2, -1243.8, 0.55],
+  [593.8, -1240.4, 0.9], [598.0, -1240.5, 0.9], [600.6, -1240.7, 0.9], [594.8, -1238.1, 0.85], [594.8, -1236.2, 0.85], [597.7, -1236.2, 0.9],
+  [594.3, -1232.9, 0.9], [599.0, -1233.6, 0.9],
+];
+/** the Main block's east range facing Bani (C12, I13 BLUE): the pale flat-roofed range I03 shows along the east ends
+ *  of the wings, joining them; its outer face slightly faceted (I03), its inner side on the wing ends and the east link.
+ *  Outer edge north to south, then the inner edge south to north */
+export const EAST_RANGE: P2[] = [[643.3, -1269.5], [644.2, -1259.5], [644.0, -1251.2], [643.5, -1243.3], [644.1, -1234.5], [643.0, -1223.4], [638.9, -1223.4], [640.8, -1231.8], [640.6, -1236.9], [640.6, -1248.3], [641.0, -1252.2], [638.7, -1265.3], [639.1, -1269.5]];
+// (the inner corners set a little inside the wings and the east link they meet, so no two faces coincide)
+/** Annex A's central tank-bearing connection between its two bent bars (C04, C05; I03: eight tanks in two rows) */
+export const A_DECK = { x0: 604, x1: 623 };
+export const A_TANKS: P2[] = [611.0, 613.8, 617.0, 620.1].flatMap((x) => [[x, 0], [x, 1]] as P2[]);
+/** Annex B's tank-bearing seams (C07; I03): the narrow lower strip splitting the north range, and the seam between the
+ *  south range and the courtyard's west and east ranges; the tanks along them */
+export const B_SEAM = { x0: 559.5, x1: 562.5 };
+export const B_TANKS: P2[] = [[560.9, -1322.2], [560.9, -1319.8], [560.4, -1312.3], [560.4, -1309.6], [541.4, -1296.6], [543.4, -1296.6], [545.3, -1296.6], [574.3, -1296.6], [576.6, -1296.6], [580.3, -1296.6], [582.2, -1296.6], [584.5, -1296.6]];
+/** the low market-style building replacing the generic block on map outline #17 by the basketball slab (C15, C16): its
+ *  box and the half width of its open aisle (east to west through the middle) */
+export const MKT = { x0: 514.8, x1: 525.9, z0: -1284.5, z1: -1273.4, aisle: 1.5 };
+/** the ground before the aisle's two mouths, kept clear of the generated hedges */
+export const inMarketMouth = (x: number, z: number) => Math.abs(z - (MKT.z0 + MKT.z1) / 2) < MKT.aisle + 1 && x > MKT.x0 - 3.5 && x < MKT.x1 + 3.5;
+/** on the basketball court (its slab and a metre round it): no generated hedges there */
+export const onEvandyCourt = (x: number, z: number) => { const xs = YARD.slab.map((p) => p[0]), zs = YARD.slab.map((p) => p[1]); return x > Math.min(...xs) - 1 && x < Math.max(...xs) + 1 && z > Math.min(...zs) - 1 && z < Math.max(...zs) + 1; };

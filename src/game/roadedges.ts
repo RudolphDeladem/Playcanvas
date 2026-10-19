@@ -1,9 +1,12 @@
 // The roads' edges, as on the real campus (the owner's corrections, 2026-10-18, with photos of a campus road and its
-// sidewalk): smooth asphalt with rounded corners where roads meet and rounded joins where a road bends, then along both
-// sides of every main road a concrete lip, an open gutter, a raised white stone kerb and a sidewalk of grey concrete
-// pavers in herringbone, with a concrete edging on the far side. The main roads are 1.5 times as wide as the map has
-// them. Roads into halls (Pent, Evandy and the others) have no sidewalk; where one of them or
-// a service lane joins a main road the sidewalk opens for it; where a footpath meets the road the gutter is bridged.
+// sidewalk): smooth asphalt with rounded corners where roads meet and rounded joins where a road bends, at the map's
+// own width (the owner, 2026-10-19: "everything should use the map as reference"). A sidewalk only where the map shows
+// one (the owner, 2026-10-19: no invented sidewalks): on a side of a main road that OSM tags with a sidewalk, or along
+// which a mapped footway runs beside the road; never on a side tagged without one or with its sidewalk mapped as a way
+// of its own (the campus draws that footway), nor on the side facing a parallel carriageway. A sidewalk is a concrete
+// lip, an open gutter, a raised white stone kerb and grey concrete pavers in herringbone with a concrete edging. Roads
+// into halls (Pent, Evandy and the others) have none; where one of them or a service lane joins a main road the
+// sidewalk opens for it; where a footpath meets the road the gutter is bridged.
 // Not drawn where a site models its own edges (ownsEdges), on the plain stretches of the NSIA Road and by the Kuffour
 // Quadrangle, on earth and brick roads, in the Legon Road cutting, on stairs, or through buildings and walls.
 //
@@ -22,21 +25,19 @@ import { asphaltTexture } from './textures';
 import { canvasTex, paverTexture, rnd } from './groundtex';
 import { excludedAll } from './groundrules';
 import { unpavedAt } from './surfaces';
+import sidewalkData from '../data/sidewalks.json';
 
 // ------------------------------------------------------------------------------------------------- the section
 /** across the road edge (m, from the asphalt's edge outward) and heights above the ground */
 const LIP = 0.18, GUTTER = 0.78, KERB = 0.96, WALK = 2.96;
 const H = { road: 0.07, lip: 0.15, gutter: 0.075, kerb: 0.26, walk: 0.2, edging: -0.05 };
-/** the route's road is at least this wide each side on the main roads (the original's ROUTE_EDGE: the ridden lanes) */
-const MIN_HALF = 3.9;
-/** the main roads 1.5 times as wide as the map's (the owner: "too thin for 2 cars", 2026-10-18) */
-const WIDEN = 1.5;
 /** how round the corners where roads meet are (the smooth minimum's reach, m) */
 const ROUND = 4;
 const TILE = 64, CELL = 1, N = TILE / CELL;
 
 // ------------------------------------------------------------------------------------------------- the roads
-interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; w0?: number }
+/** l, r: a sidewalk on the segment's left, right (seen from a toward b, x east, z south) */
+interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; l: boolean; r: boolean }
 const main: Seg[] = [], side: Seg[] = [], path: Seg[] = [];
 const GRID = 16, REACH = 12;
 const gkey = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
@@ -74,12 +75,12 @@ function prepare() {
     const list = isMain[ri] ? main : r.cls <= 3 ? side : r.surface === 'steps' ? null : path;
     if (!list) return;
     const half = ROAD_WIDTH[r.cls] / 2;
-    const w = isMain[ri] ? Math.max(half, MIN_HALF) * WIDEN : r.cls === 4 ? 1.3 : half;
+    const w = r.cls === 4 ? 1.3 : half;
     let g = -1;
     if (isMain[ri]) { const root = find(ri); g = gid.get(root) ?? gid.set(root, groups++).get(root)!; }
     for (let k = 0; k < r.nodes.length - 1; k++) {
       const a = r.nodes[k], b = r.nodes[k + 1];
-      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g, w0: w / WIDEN };
+      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g, l: false, r: false };
       list.push(s);
       const grid = grids[list === main ? 0 : list === side ? 1 : 2];
       const x0 = Math.floor((Math.min(s.ax, s.bx) - REACH) / GRID), x1 = Math.floor((Math.max(s.ax, s.bx) + REACH) / GRID);
@@ -87,24 +88,70 @@ function prepare() {
       for (let i = x0; i <= x1; i++) for (let j = z0; j <= z1; j++) { const key = gkey(i, j); let c = grid.get(key); if (!c) grid.set(key, (c = [])); c.push(s); }
     }
   });
-  // a dual carriageway keeps its mapped width: widened, its two roads and their sidewalks would close over the median
-  // (the lawn between them, as before the Balme Library); so does any road running alongside another this closely
-  const narrow = new Set<Seg>();
-  for (const s of main) {
-    const dx = s.bx - s.ax, dz = s.bz - s.az, L = Math.hypot(dx, dz);
-    if (L < 1) continue;
-    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+  for (const s of main) sidewalkSides(s);
+}
+
+// ------------------------------------------------------------------------------------------------- the sidewalks
+interface Tagged { l: boolean | null; r: boolean | null; pts: number[] }
+const TAGGED = (sidewalkData as { ways: Tagged[] }).ways;
+/** the main roads' segments with their sidewalk sides (the checks and the review map) */
+export function sidewalkSegments() { prepare(); return main.map((s) => ({ ax: s.ax, az: s.az, bx: s.bx, bz: s.bz, w: s.w, l: s.l, r: s.r })); }
+/** counts for the checks: segments with a sidewalk side and why */
+export const SIDEWALK_STATS = { segs: 0, sides: 0, tagYes: 0, tagNo: 0, footway: 0, median: 0 };
+/** which sides of a main road segment have a sidewalk, from the map's evidence only */
+function sidewalkSides(s: Seg) {
+  const dx = s.bx - s.ax, dz = s.bz - s.az, L = Math.hypot(dx, dz);
+  SIDEWALK_STATS.segs++;
+  if (L < 0.5) return;
+  const ux = dx / L, uz = dz / L;
+  // left of a -> b: (p - a) . (uz, -ux) > 0 (x east, z south)
+  const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+  // 1. the OSM tags of the way this segment lies on (left and right along the way's own direction)
+  let tag: { l: boolean | null; r: boolean | null } | null = null;
+  for (const t of TAGGED) {
+    for (let i = 0; i + 3 < t.pts.length; i += 2) {
+      const ax = t.pts[i], az = t.pts[i + 1], bx = t.pts[i + 2], bz = t.pts[i + 3], tx = bx - ax, tz = bz - az, tl = Math.hypot(tx, tz);
+      if (tl < 0.5 || Math.abs((tx * ux + tz * uz) / tl) < 0.9) continue;
+      const q = Math.max(0, Math.min(1, ((mx - ax) * tx + (mz - az) * tz) / (tl * tl)));
+      if (Math.hypot(mx - ax - tx * q, mz - az - tz * q) > 3) continue;
+      tag = tx * ux + tz * uz > 0 ? { l: t.l, r: t.r } : { l: t.r, r: t.l };
+      break;
+    }
+    if (tag) break;
+  }
+  for (const side of ['l', 'r'] as const) {
+    const t = tag?.[side];
+    if (t === true) { s[side] = true; SIDEWALK_STATS.tagYes++; SIDEWALK_STATS.sides++; continue; }
+    if (t === false) { SIDEWALK_STATS.tagNo++; continue; }
+    const sg = side === 'l' ? 1 : -1, nx = uz * sg, nz = -ux * sg;
+    // 2. not toward a parallel main carriageway close by (a dual carriageway's median, a service road alongside)
+    let median = false;
     for (const o of grids[0].get(gkey(Math.floor(mx / GRID), Math.floor(mz / GRID))) ?? []) {
       if (o === s) continue;
       const ox = o.bx - o.ax, oz = o.bz - o.az, OL = Math.hypot(ox, oz);
-      if (OL < 1 || Math.abs((dx * ox + dz * oz) / (L * OL)) < 0.9) continue;
-      // (beside it, not further along the same line: the midpoint falls inside the other segment, off to one side)
-      const t = ((mx - o.ax) * ox + (mz - o.az) * oz) / (OL * OL), off = Math.abs((mx - o.ax) * oz - (mz - o.az) * ox) / OL;
-      if (t <= 0.02 || t >= 0.98 || off < 3) continue;
-      if (off < s.w + o.w + 2 * WALK + 2) { narrow.add(s); narrow.add(o); }
+      if (OL < 1 || Math.abs((ux * ox + uz * oz) / OL) < 0.9) continue;
+      const q = ((mx - o.ax) * ox + (mz - o.az) * oz) / (OL * OL);
+      if (q <= 0.02 || q >= 0.98) continue;
+      const px = o.ax + ox * q - mx, pz = o.az + oz * q - mz, off = px * nx + pz * nz;
+      if (off > 3 && off < s.w + o.w + 2 * WALK + 2) { median = true; break; }
     }
+    if (median) { SIDEWALK_STATS.median++; continue; }
+    // 3. a mapped footway running beside the road on this side, along most of the segment: the sidewalk is there
+    let hits = 0, n = 0;
+    for (let a = 0; a <= L; a += 4) {
+      n++;
+      const px = s.ax + ux * Math.min(a, L), pz = s.az + uz * Math.min(a, L);
+      for (const p of grids[2].get(gkey(Math.floor(px / GRID), Math.floor(pz / GRID))) ?? []) {
+        const fx = p.bx - p.ax, fz = p.bz - p.az, FL = Math.hypot(fx, fz);
+        if (FL < 0.5 || Math.abs((fx * ux + fz * uz) / FL) < 0.85) continue;
+        const q = ((px - p.ax) * fx + (pz - p.az) * fz) / (FL * FL);
+        if (q < -0.05 || q > 1.05) continue;
+        const off = (p.ax + fx * q - px) * nx + (p.az + fz * q - pz) * nz;
+        if (off > s.w - 0.5 && off < s.w + 6) { hits++; break; }
+      }
+    }
+    if (hits >= Math.max(1, n * 0.5)) { s[side] = true; SIDEWALK_STATS.footway++; SIDEWALK_STATS.sides++; }
   }
-  for (const s of narrow) s.w = s.w0 ?? s.w;
 }
 
 function segDist(s: Seg, x: number, z: number) {
@@ -121,6 +168,26 @@ function mainField(x: number, z: number) {
   if (!list) return FAR;
   perGroup.clear();
   for (const s of list) {
+    const d = segDist(s, x, z) - s.w;
+    if (d > ROUND + WALK + 2) continue;
+    const p = perGroup.get(s.g);
+    if (p === undefined || d < p) perGroup.set(s.g, d);
+  }
+  let f = FAR;
+  for (const d of perGroup.values()) f = f === FAR ? d : smin(f, d, ROUND);
+  return f;
+}
+/** distance from (x, z) to the edge of the nearest main road on a side of it that has a sidewalk (as mainField, corners
+ *  rounded); FAR where no sidewalk side is near */
+function walkField(x: number, z: number) {
+  const list = grids[0].get(gkey(Math.floor(x / GRID), Math.floor(z / GRID)));
+  if (!list) return FAR;
+  perGroup.clear();
+  for (const s of list) {
+    if (!s.l && !s.r) continue;
+    const dx = s.bx - s.ax, dz = s.bz - s.az;
+    const left = (x - s.ax) * dz - (z - s.az) * dx > 0;
+    if (left ? !s.l : !s.r) continue;
     const d = segDist(s, x, z) - s.w;
     if (d > ROUND + WALK + 2) continue;
     const p = perGroup.get(s.g);
@@ -285,17 +352,19 @@ function clip(poly: Pt[], f: (p: Pt) => number): Pt[] {
 }
 
 interface Band { soup: string; test: ((v: number[]) => number)[] }
-/** v = [main field, side-road field, footpath field] */
+/** v = [main field, side-road field, footpath field, sidewalk field]; the edge bands only where the nearest main road
+ *  edge is one with a sidewalk on this side */
+const own = (v: number[]) => v[0] - v[3] + 0.3;
 const BANDS: Band[] = [
   { soup: 'road', test: [(v) => -v[0]] },
-  { soup: 'lip', test: [(v) => v[0], (v) => LIP - v[0], (v) => v[1] - 0.6] },
-  { soup: 'gutter', test: [(v) => v[0] - LIP, (v) => GUTTER - v[0], (v) => v[1] - 0.6, (v) => v[2]] },
+  { soup: 'lip', test: [own, (v) => v[3], (v) => LIP - v[3], (v) => v[1] - 0.6] },
+  { soup: 'gutter', test: [own, (v) => v[3] - LIP, (v) => GUTTER - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
   // (a footpath crossing the gutter: paved over, a slab at the sidewalk's height)
-  { soup: 'walk', test: [(v) => v[0] - LIP, (v) => GUTTER - v[0], (v) => v[1] - 0.6, (v) => -v[2]] },
+  { soup: 'walk', test: [own, (v) => v[3] - LIP, (v) => GUTTER - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
   // (the white stone kerb along the sidewalk's road side, a little higher; flush where a footpath crosses)
-  { soup: 'kerb', test: [(v) => v[0] - GUTTER, (v) => KERB - v[0], (v) => v[1] - 0.6, (v) => v[2]] },
-  { soup: 'walk', test: [(v) => v[0] - GUTTER, (v) => KERB - v[0], (v) => v[1] - 0.6, (v) => -v[2]] },
-  { soup: 'walk', test: [(v) => v[0] - KERB, (v) => WALK - v[0], (v) => v[1] - 0.6] },
+  { soup: 'kerb', test: [own, (v) => v[3] - GUTTER, (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
+  { soup: 'walk', test: [own, (v) => v[3] - GUTTER, (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
+  { soup: 'walk', test: [own, (v) => v[3] - KERB, (v) => WALK - v[3], (v) => v[1] - 0.6] },
 ];
 
 /** builds one 64 m piece: its surfaces, one soup a material; null when no main road comes near it */
@@ -306,12 +375,13 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
   let near = false;
   for (let i = Math.floor((x0 - REACH) / GRID); i <= Math.floor((x0 + TILE + REACH) / GRID) && !near; i++) for (let j = Math.floor((z0 - REACH) / GRID); j <= Math.floor((z0 + TILE + REACH) / GRID) && !near; j++) near = !!grids[0].get(gkey(i, j))?.length;
   if (!near) return null;
-  const V = N + 1, fm = new Float32Array(V * V), fs = new Float32Array(V * V), fp = new Float32Array(V * V);
+  const V = N + 1, fm = new Float32Array(V * V), fs = new Float32Array(V * V), fp = new Float32Array(V * V), fw = new Float32Array(V * V);
   for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
     const x = x0 + i * CELL, z = z0 + j * CELL, k = j * V + i;
     fm[k] = mainField(x, z);
     fs[k] = fm[k] < WALK + 1 ? plainField(1, x, z) : FAR;
     fp[k] = fm[k] < WALK + 1 && fm[k] > -1 ? plainField(2, x, z) : FAR;
+    fw[k] = fm[k] < WALK + 1 ? walkField(x, z) : FAR;
   }
   const soups: Record<string, Soup> = {
     road: new Soup('road', H.road, null),
@@ -335,14 +405,15 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
       if (excludedAll(cx, cz)) { flush(i); continue; }
       const edgeOk = !excludedEdge(cx, cz);
       // a whole cell of asphalt, or of sidewalk clear of side roads and footpaths: part of a strip
-      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : edgeOk && Math.min(...m) >= KERB && Math.max(...m) <= WALK && ks.every((k) => fs[k] >= 0.6) ? 'walk' : null;
+      const w = ks.map((k) => fw[k]);
+      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : edgeOk && Math.min(...w) >= KERB && Math.max(...w) <= WALK && ks.every((k) => fs[k] >= 0.6 && fm[k] - fw[k] + 0.3 >= 0) ? 'walk' : null;
       if (whole) {
         if (run && run.soup !== whole) flush(i);
         if (!run) run = { soup: whole, i0: i };
         continue;
       }
       flush(i);
-      const cell: Pt[] = ks.map((k, n) => [x0 + (i + (n === 1 || n === 2 ? 1 : 0)) * CELL, z0 + (j + (n >= 2 ? 1 : 0)) * CELL, [fm[k], fs[k], fp[k]]]);
+      const cell: Pt[] = ks.map((k, n) => [x0 + (i + (n === 1 || n === 2 ? 1 : 0)) * CELL, z0 + (j + (n >= 2 ? 1 : 0)) * CELL, [fm[k], fs[k], fp[k], fw[k]]]);
       // (the corners in order: (i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1): clockwise seen from above, x east, z south)
       for (const b of BANDS) {
         if (b.soup !== 'road' && !edgeOk) continue;
@@ -465,14 +536,17 @@ export class RoadEdges {
  *  and a free-ridden bike rides over it) */
 export function onEdges(x: number, z: number, pad = 0) {
   prepare();
-  return mainField(x, z) < WALK + pad && !excludedAll(x, z);
+  const m = mainField(x, z);
+  if (m < pad) return !excludedAll(x, z);
+  const w = walkField(x, z);
+  return w < WALK + pad && m - w + 0.3 >= 0 && !excludedAll(x, z);
 }
 
 /** how far above the ground a free-ridden bike is here: up on a sidewalk or a gutter's lip (m) */
 export function edgeLift(x: number, z: number) {
   prepare();
-  const m = mainField(x, z);
-  if (m < 0 || m > WALK) return 0;
+  const m = mainField(x, z), w = walkField(x, z);
+  if (m < 0 || w > WALK || m - w + 0.3 < 0) return 0;
   if (excludedAll(x, z) || excludedEdge(x, z) || plainField(1, x, z) < 0.6) return 0;
-  return m < LIP ? H.lip : m < GUTTER ? (plainField(2, x, z) < 0 ? H.walk : H.gutter) : m < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
+  return w < LIP ? H.lip : w < GUTTER ? (plainField(2, x, z) < 0 ? H.walk : H.gutter) : w < KERB && plainField(2, x, z) >= 0 ? H.kerb : H.walk;
 }
