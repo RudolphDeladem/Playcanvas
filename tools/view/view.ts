@@ -7,7 +7,7 @@ import { Campus } from '../../src/engine/campus';
 import { groundHeight } from '../../src/game/relief';
 import * as THREE from '../../src/engine/lite3';
 import { Surfaces } from '../../src/game/surfaces';
-import { RoadEdges } from '../../src/game/roadedges';
+import { RoadEdges, medianHedges } from '../../src/game/roadedges';
 import { VEG_DROPS, vegetationBlocked } from '../../src/game/vegrules';
 import { buildBalmeShrubs } from '../../src/game/shrubs';
 import { loadCollision } from '../../src/game/collision';
@@ -55,6 +55,8 @@ e.app.on('update', () => {
   await new Promise((res) => setTimeout(res, +(q.get('settle') ?? 2500)));
   // ?hide=id,id: those materials not drawn (checks)
   for (const id of (q.get('hide') ?? '').split(',').filter(Boolean)) campus.setVisible(+id, false);
+  // ?hedges=1: where the median hedges stand (checks)
+  if (q.get('hedges') === '1') (window as any).__hedges = medianHedges();
   (window as any).__stats = { ...campus.stats, ...(game ? { veg: VEG_DROPS } : {}), drawCalls: (e.app as any).stats?.drawCalls?.total, fps: e.app.stats.frame.fps };
   (window as any).__done = true;
 })();

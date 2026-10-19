@@ -1,20 +1,19 @@
 // Short plants in place of the Balme Library's tree groves (the owner, 2026-10-19: "remove excess tree from balme,
 // replace it with short plant"). The original plants trees on a grid in four leaf-litter beds before the library
 // (balme.ts: either side of the forecourt between the car parks, and along the lanes past the sunken square); those trees
-// are left out (vegrules.ts) and a low, rounded shrub stands at each of their places instead, with a second between them
-// in the forecourt beds. Three shapes and shades, each one instanced mesh: three draw calls in all.
+// are left out (vegrules.ts) and a low, rounded shrub stands at each of their places along the lanes instead (the beds
+// either side of the forecourt are car parks, surfaces.ts). Three shapes and shades, each one instanced mesh. And the
+// clipped round shrubs down the median islands of Dr. J.B. Danquah Avenue (the owner's satellite picture).
 import * as THREE from '../engine/lite3';
 import { mergeGeometries } from '../engine/lite3';
 import { groundHeight } from './relief';
 import { BALME_SHRUB_BEDS } from './vegrules';
+import { medianHedges } from './roadedges';
 
 /** where the original's trees stood (balme.ts, without its small random offsets) */
 function spots(): [number, number][] {
   const out: [number, number][] = [];
-  for (const wz of [22, 27.5, 33]) {
-    for (const wx of [-14, -20, -26, -32, -38, -43]) out.push([wx, wz], [wx - 3, wz + 1.4]);
-    for (const wx of [25, 31, 37, 43, 48.5]) out.push([wx, wz], [wx + 3, wz + 1.4]);
-  }
+  // (the beds either side of the forecourt are car parks, the owner's satellite picture, 2026-10-19: surfaces.ts)
   for (let wz = 43; wz <= 103; wz += 6.5) out.push([-18.5, wz], [-22, wz + 3], [34.8, wz + 1.5]);
   // (only inside the beds, clear of their edges)
   return out.filter(([x, z]) => BALME_SHRUB_BEDS.some(([x0, x1, z0, z1]) => x > x0 + 0.8 && x < x1 - 0.8 && z > z0 + 0.8 && z < z1 - 0.8));
@@ -34,10 +33,12 @@ function shrubShape(seed: number, leaf: string[]) {
   return mergeGeometries(parts);
 }
 
-/** the shrubs, as a group to add to the scene */
+/** the shrubs, as a group to add to the scene: the Balme Library's and the clipped ones down the median islands of
+ *  Dr. J.B. Danquah Avenue (roadedges.ts medianHedges; smaller, rounder, a darker green) */
 export function buildBalmeShrubs(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'balme-shrubs';
+  group.add(clipped(medianHedges()));
   const all = spots();
   const kinds = [['#3f6b2a', '#4f7d33', '#36602a'], ['#557a2e', '#6a8c38', '#4a6e2a'], ['#2f5a2a', '#3e6b33', '#2a5226']];
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
@@ -53,4 +54,19 @@ export function buildBalmeShrubs(): THREE.Group {
     group.add(im);
   });
   return group;
+}
+
+/** clipped round shrubs, about 0.8 m tall, at these spots */
+function clipped(at: [number, number][]) {
+  const g = new THREE.Group();
+  if (!at.length) return g;
+  const geo = new THREE.IcosahedronGeometry(1, 1).scale(0.62, 0.5, 0.62).translate(0, 0.42, 0);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color('#2f5b25');
+  for (let v = 0; v < p.count; v++) { const k = 0.7 + 0.3 * Math.min(1, Math.max(0, p.getY(v) / 0.85)); col[v * 3] = c.r * k; col[v * 3 + 1] = c.g * k; col[v * 3 + 2] = c.b * k; }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const im = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), at.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), pp = new THREE.Vector3(), s = new THREE.Vector3(1, 1, 1);
+  at.forEach(([x, z], i) => im.setMatrixAt(i, m.compose(pp.set(x, groundHeight(x, z), z), q, s)));
+  g.add(im);
+  return g;
 }

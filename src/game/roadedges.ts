@@ -8,6 +8,10 @@
 // carriageway (the lawn median of Dr. J.B. Danquah Avenue), on roads into halls (Pent, Evandy and the others), or along
 // a car park's frontage, where the asphalt runs on to the car park with no grass between (the owner: "sometimes grass
 // separating grass from park, fix it").
+// Between the two carriageways of a dual road (Dr. J.B. Danquah Avenue, from the main gate to Commonwealth Hall: the
+// owner's satellite picture, 2026-10-19) the median is a row of lawn islands, each kerbed in white stone with rounded
+// ends, a row of clipped round shrubs down its middle (shrubs.ts) and no trees; asphalt where a road crosses it, a paved
+// strip where a footpath does, with a zebra crossing on each carriageway.
 // Not drawn where a site models its own edges (ownsEdges), on the plain stretches of the NSIA Road and by the Kuffour
 // Quadrangle, on earth and brick roads, in the Legon Road cutting, on stairs, or through buildings and walls.
 //
@@ -37,7 +41,7 @@ const TILE = 64, CELL = 1, N = TILE / CELL;
 
 // ------------------------------------------------------------------------------------------------- the roads
 /** l, r: a sidewalk on the segment's left, right (seen from a toward b, x east, z south) */
-interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; l: boolean; r: boolean; name?: string }
+interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; l: boolean; r: boolean; name?: string; med?: number }
 const main: Seg[] = [], side: Seg[] = [], path: Seg[] = [];
 const GRID = 16, REACH = 12;
 const gkey = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
@@ -116,7 +120,12 @@ function sidewalkSides(s: Seg) {
       const off = (o.ax + ox * q - mx) * nx + (o.az + oz * q - mz) * nz;
       // (the other carriageway of the same road, as Dr. J.B. Danquah Avenue's two either side of their lawn median, or
       // any road running this close alongside)
-      if (off > 3 && (off < s.w + o.w + 2 * WALK + 4 || (o.name === s.name && off < 40))) { median = true; break; }
+      if (off > 3 && (off < s.w + o.w + 2 * WALK + 4 || (o.name === s.name && off < 40))) {
+        median = true;
+        // (the other carriageway of the same road: the lawn median between them, its centre off / 2 to this side)
+        if (o.name === s.name && MEDIAN_ROADS.has(s.name)) s.med = sg * off;
+        break;
+      }
     }
     if (median) { SIDEWALK_STATS.median++; continue; }
     s[side] = true; SIDEWALK_STATS.sides++;
@@ -166,6 +175,88 @@ function walkField(x: number, z: number) {
   for (const d of perGroup.values()) f = f === FAR ? d : smin(f, d, ROUND);
   return f;
 }
+// ------------------------------------------------------------------------------------------------- the median
+/** the dual roads whose median is laid out as kerbed lawn islands with hedges (the owner's satellite picture of
+ *  the road from the main gate to Commonwealth Hall); the N4's own median is the original's (okjplan.ts) */
+const MEDIAN_ROADS = new Set(['Dr. J.B. Danquah Avenue']);
+/** how round the median islands' ends are (the smooth minimum's reach, m) */
+const NOSE = 8;
+const near = (x: number, z: number, k: number, r = 2) => {
+  const out = new Set<Seg>();
+  for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) for (const o of grids[k].get(gkey(Math.floor(x / GRID) + i, Math.floor(z / GRID) + j)) ?? []) out.add(o);
+  return out;
+};
+const foot = (s: Seg, x: number, z: number) => {
+  const dx = s.bx - s.ax, dz = s.bz - s.az, l2 = dx * dx + dz * dz || 1, t = ((x - s.ax) * dx + (z - s.az) * dz) / l2;
+  return { t, fx: s.ax + dx * t, fz: s.az + dz * t };
+};
+/**
+ * The median at (x, z): [F, I, P], -FAR/FAR when not between two carriageways of one road.
+ * I: the distance to the nearer carriageway's edge (positive between them);
+ * F: the islands (positive on the lawn): I with the roads that cross the median cut out, the ends rounded;
+ * P: the distance to a footpath crossing it (negative on the path).
+ */
+function medianAt(x: number, z: number): [number, number, number] {
+  let best: { I: number; a: Seg } | null = null;
+  const segs = [...near(x, z, 0)].filter((s) => s.name != null && s.med !== undefined);
+  for (const a of segs) {
+    const fa = foot(a, x, z);
+    if (fa.t < -0.02 || fa.t > 1.02) continue;
+    const da = Math.hypot(x - fa.fx, z - fa.fz);
+    for (const b of segs) {
+      if (b === a || b.name !== a.name || b.med === undefined || Math.sign(b.med) === 0) continue;
+      const fb = foot(b, x, z);
+      if (fb.t < -0.02 || fb.t > 1.02) continue;
+      const db = Math.hypot(x - fb.fx, z - fb.fz);
+      // (between them: the feet on opposite sides, as far apart as the median says)
+      if ((fa.fx - x) * (fb.fx - x) + (fa.fz - z) * (fb.fz - z) >= 0 || da + db > Math.abs(a.med!) + 2) continue;
+      const I = Math.min(da - a.w, db - b.w);
+      if (!best || I > best.I) best = { I, a };
+    }
+  }
+  if (!best) return [FAR, -FAR, FAR];
+  const { I, a } = best;
+  const ux = (a.bx - a.ax) / (Math.hypot(a.bx - a.ax, a.bz - a.az) || 1), uz = (a.bz - a.az) / (Math.hypot(a.bx - a.ax, a.bz - a.az) || 1);
+  // roads crossing the median (another road, or a lane), and footpaths
+  let G = FAR, P = FAR;
+  for (const k of [0, 1] as const) for (const o of near(x, z, k, 1)) {
+    if (o.name != null && o.name === a.name) continue;
+    const L = Math.hypot(o.bx - o.ax, o.bz - o.az) || 1;
+    if (Math.abs(((o.bx - o.ax) * ux + (o.bz - o.az) * uz) / L) > 0.7) continue;
+    G = Math.min(G, segDist(o, x, z) - o.w - 0.5);
+  }
+  for (const o of near(x, z, 2, 1)) {
+    const L = Math.hypot(o.bx - o.ax, o.bz - o.az) || 1;
+    if (Math.abs(((o.bx - o.ax) * ux + (o.bz - o.az) * uz) / L) > 0.7) continue;
+    P = Math.min(P, segDist(o, x, z) - 1.2);
+  }
+  return [smin(I, G, NOSE), I, P];
+}
+/** in the median between two carriageways (its islands, gaps and paths): no trees there (vegrules.ts) */
+export function inMedian(x: number, z: number) { prepare(); return medianAt(x, z)[1] > 0; }
+let hedgeSpots: [number, number][] | null = null;
+/** the clipped shrubs down the middle of the median islands, 2.4 m apart (shrubs.ts) */
+export function medianHedges() {
+  prepare();
+  if (hedgeSpots) return hedgeSpots;
+  const out: [number, number][] = [], seen = new Set<string>();
+  for (const s of main) {
+    if (s.med === undefined) continue;
+    const L = Math.hypot(s.bx - s.ax, s.bz - s.az);
+    if (L < 1) continue;
+    const ux = (s.bx - s.ax) / L, uz = (s.bz - s.az) / L, nx = uz, nz = -ux;
+    for (let t = 0; t <= L; t += 2.4) {
+      const x = s.ax + ux * t + nx * s.med / 2, z = s.az + uz * t + nz * s.med / 2;
+      const key = `${Math.round(x / 1.6)},${Math.round(z / 1.6)}`;
+      if (seen.has(key)) continue;
+      const [F, , P] = medianAt(x, z);
+      if (F < 1.6 || P < 0.8) continue;
+      seen.add(key); out.push([x, z]);
+    }
+  }
+  return (hedgeSpots = out);
+}
+
 /** distance to the nearest road of another kind (service lanes and hall roads: 1; footpaths: 2), negative on it */
 function plainField(kind: 1 | 2, x: number, z: number) {
   const list = grids[kind].get(gkey(Math.floor(x / GRID), Math.floor(z / GRID)));
@@ -334,6 +425,11 @@ const BANDS: Band[] = [
   { soup: 'kerb', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => v[2]] },
   { soup: 'walk', test: [own, (v) => v[3], (v) => KERB - v[3], (v) => v[1] - 0.6, (v) => -v[2]] },
   { soup: 'walk', test: [own, (v) => v[3] - KERB, (v) => WALK - v[3], (v) => v[1] - 0.6] },
+  // the median (v[4..6] = F, I, P): asphalt where a road crosses it, the islands' white kerb, a paved strip where a
+  // footpath crosses
+  { soup: 'road', test: [(v) => v[0], (v) => v[5], (v) => -v[4], (v) => v[6]] },
+  { soup: 'kerb', test: [(v) => v[0], (v) => v[4], (v) => KERB - v[4], (v) => v[6]] },
+  { soup: 'walk', test: [(v) => v[0], (v) => v[5], (v) => -v[6]] },
 ];
 
 /** builds one 64 m piece: its surfaces, one soup a material; null when no main road comes near it */
@@ -344,13 +440,15 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
   let near = false;
   for (let i = Math.floor((x0 - REACH) / GRID); i <= Math.floor((x0 + TILE + REACH) / GRID) && !near; i++) for (let j = Math.floor((z0 - REACH) / GRID); j <= Math.floor((z0 + TILE + REACH) / GRID) && !near; j++) near = !!grids[0].get(gkey(i, j))?.length;
   if (!near) return null;
-  const V = N + 1, fm = new Float32Array(V * V), fs = new Float32Array(V * V), fp = new Float32Array(V * V), fw = new Float32Array(V * V);
+  const V = N + 1, fm = new Float32Array(V * V), fs = new Float32Array(V * V), fp = new Float32Array(V * V), fw = new Float32Array(V * V), fd = new Float32Array(V * V * 3);
   for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
     const x = x0 + i * CELL, z = z0 + j * CELL, k = j * V + i;
     fm[k] = mainField(x, z);
     fs[k] = fm[k] < WALK + 1 ? plainField(1, x, z) : FAR;
     fp[k] = fm[k] < WALK + 1 && fm[k] > -1 ? plainField(2, x, z) : FAR;
     fw[k] = fm[k] < WALK + 1 ? walkField(x, z) : FAR;
+    const md = fm[k] > -1 && fm[k] < 20 ? medianAt(x, z) : [FAR, -FAR, FAR];
+    fd[k * 3] = md[0]; fd[k * 3 + 1] = md[1]; fd[k * 3 + 2] = md[2];
   }
   const soups: Record<string, Soup> = {
     road: new Soup('road', H.road, null),
@@ -375,19 +473,20 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
         if (!run) run = { soup: 'road', i0: i };
         continue;
       }
-      if (Math.min(...m) > WALK) { flush(i); continue; }
+      const inMed = ks.some((k) => fd[k * 3 + 1] > -1);
+      if (Math.min(...m) > WALK && !inMed) { flush(i); continue; }
       if (excludedAll(cx, cz)) { flush(i); continue; }
       const edgeOk = !excludedEdge(cx, cz);
       // a whole cell of asphalt, or of sidewalk clear of side roads and footpaths: part of a strip
       const w = ks.map((k) => fw[k]);
-      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : edgeOk && Math.min(...w) >= KERB && Math.max(...w) <= WALK && ks.every((k) => fs[k] >= 0.6 && fm[k] - fw[k] + 0.3 >= 0) ? 'walk' : null;
+      const whole = Math.max(...m) < 0 && !buildingAt(cx, cz) ? 'road' : !inMed && edgeOk && Math.min(...w) >= KERB && Math.max(...w) <= WALK && ks.every((k) => fs[k] >= 0.6 && fm[k] - fw[k] + 0.3 >= 0) ? 'walk' : null;
       if (whole) {
         if (run && run.soup !== whole) flush(i);
         if (!run) run = { soup: whole, i0: i };
         continue;
       }
       flush(i);
-      const cell: Pt[] = ks.map((k, n) => [x0 + (i + (n === 1 || n === 2 ? 1 : 0)) * CELL, z0 + (j + (n >= 2 ? 1 : 0)) * CELL, [fm[k], fs[k], fp[k], fw[k]]]);
+      const cell: Pt[] = ks.map((k, n) => [x0 + (i + (n === 1 || n === 2 ? 1 : 0)) * CELL, z0 + (j + (n >= 2 ? 1 : 0)) * CELL, [fm[k], fs[k], fp[k], fw[k], fd[k * 3], fd[k * 3 + 1], fd[k * 3 + 2]]]);
       // (the corners in order: (i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1): clockwise seen from above, x east, z south)
       for (const b of BANDS) {
         if (b.soup !== 'road' && !edgeOk) continue;
@@ -415,6 +514,7 @@ function buildTile(ti: number, tj: number): Record<Mat, Soup> | null {
   soups.kerb.walls(soups.kerbSides);
   soups.kerb.append(soups.kerbSides);
   const dashes = centreDashes(x0, z0);
+  zebras(dashes, x0, z0);
   return { road: soups.road, concrete: soups.walls, walk: soups.walk, paint: dashes, kerb: soups.kerb };
 }
 
@@ -438,6 +538,33 @@ function centreDashes(x0: number, z0: number) {
     }
   }
   return s;
+}
+/** zebra crossings where a footpath crosses a carriageway of a dual road (the owner's satellite picture): bars along the
+ *  road, 0.5 m wide and 3 m long, a metre apart across it */
+let crossings: { x: number; z: number; ux: number; uz: number; w: number }[] | null = null;
+function zebras(s: Soup, x0: number, z0: number) {
+  if (!crossings) {
+    crossings = [];
+    for (const p of path) for (const r of near((p.ax + p.bx) / 2, (p.az + p.bz) / 2, 0, 3)) {
+      if (r.med === undefined) continue;
+      // (the crossing point of the two segments)
+      const ex = p.bx - p.ax, ez = p.bz - p.az, fx = r.bx - r.ax, fz = r.bz - r.az, den = ex * fz - ez * fx;
+      if (Math.abs(den) < 1e-6) continue;
+      const t = ((r.ax - p.ax) * fz - (r.az - p.az) * fx) / den, u = ((r.ax - p.ax) * ez - (r.az - p.az) * ex) / den;
+      if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+      const x = p.ax + ex * t, z = p.az + ez * t, L = Math.hypot(fx, fz);
+      if (crossings.some((c) => Math.hypot(c.x - x, c.z - z) < 4)) continue;
+      crossings.push({ x, z, ux: fx / L, uz: fz / L, w: r.w });
+    }
+  }
+  for (const c of crossings) {
+    if (c.x < x0 || c.x >= x0 + TILE || c.z < z0 || c.z >= z0 + TILE) continue;
+    const nx = c.uz, nz = -c.ux;
+    for (let o = -c.w + 0.5; o <= c.w - 0.5; o += 1) {
+      const cx = c.x + nx * o, cz = c.z + nz * o, ax = c.ux * 1.5, az = c.uz * 1.5, bx = nx * 0.25, bz = nz * 0.25;
+      s.poly([[cx - ax - bx, cz - az - bz], [cx + ax - bx, cz + az - bz], [cx + ax + bx, cz + az + bz], [cx - ax + bx, cz - az + bz]]);
+    }
+  }
 }
 function nearOtherRoad(own: Seg, x: number, z: number) {
   for (const k of [0, 1] as const) for (const s of grids[k].get(gkey(Math.floor(x / GRID), Math.floor(z / GRID))) ?? []) {

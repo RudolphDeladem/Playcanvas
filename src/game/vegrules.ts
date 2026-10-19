@@ -9,11 +9,12 @@
 // - the Balme Library's tree groves either side of its forecourt and the tree rows along the lanes past the square
 //   (the owner, 2026-10-19: "remove excess tree from balme, replace it with short plant"): short shrubs instead
 //   (shrubs.ts);
+// - the median of a dual road (Dr. J.B. Danquah Avenue, the owner's satellite picture): clipped shrubs only;
 // - excess trees (the owner, 2026-10-19): outside the mapped woods, a tree over 3 m tall standing within 6 m of one
 //   already kept is left out, so no two crowns crowd into one; street trees (22-34 m apart), bushes and hedges keep.
 import { AREAS, buildingAt } from './campusmap';
 import { roadClearance } from './life';
-import { onEdges } from './roadedges';
+import { inMedian, onEdges } from './roadedges';
 import { onHardSurface } from './surfaces';
 
 const GRID = 32;
@@ -70,10 +71,10 @@ function crowded(x: number, z: number) {
 }
 
 /** trees and plants left out so far, by reason (the checks) */
-export const VEG_DROPS = { road: 0, edge: 0, surface: 0, area: 0, building: 0, balme: 0, crowded: 0, kept: 0 };
+export const VEG_DROPS = { road: 0, edge: 0, surface: 0, area: 0, building: 0, balme: 0, median: 0, crowded: 0, kept: 0 };
 /** whether a tree or plant standing at (x, z), h metres tall, is left out */
 export function vegetationBlocked(x: number, z: number, h = 0) {
-  const why = roadClearance(x, z, 6, -1, true) < 0 ? 'road' : onEdges(x, z, 0.4) ? 'edge' : onHardSurface(x, z) ? 'surface' : inMappedHardArea(x, z) ? 'area' : buildingAt(x, z) ? 'building' : inBalmeBeds(x, z) ? 'balme' : null;
+  const why = roadClearance(x, z, 6, -1, true) < 0 ? 'road' : onEdges(x, z, 0.4) ? 'edge' : onHardSurface(x, z) ? 'surface' : inMappedHardArea(x, z) ? 'area' : buildingAt(x, z) ? 'building' : inBalmeBeds(x, z) ? 'balme' : inMedian(x, z) ? 'median' : null;
   if (why) { VEG_DROPS[why]++; return true; }
   // the spacing between trees: one decision a spot
   const d = decidedAt(x, z);

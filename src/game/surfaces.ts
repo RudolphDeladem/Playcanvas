@@ -12,22 +12,28 @@
 import * as THREE from '../engine/lite3';
 import data from '../data/surfaces.json';
 import { groundHeight } from './relief';
-import { asphaltTexture, grassTexture } from './textures';
+import { asphaltTexture, concreteTexture, grassTexture } from './textures';
 import { canvasTex, paverTexture, rnd } from './groundtex';
 import { excludedAll } from './groundrules';
 
-export type SurfaceClass = 'parking' | 'parking-pavers' | 'plaza' | 'pavers-walk' | 'pavers-road' | 'earth' | 'gravel' | 'concrete-walk' | 'concrete-road' | 'asphalt-walk' | 'grass';
+export type SurfaceClass = 'parking' | 'parking-pavers' | 'plaza' | 'pavers-walk' | 'pavers-road' | 'earth' | 'gravel' | 'concrete-walk' | 'concrete-road' | 'asphalt-walk' | 'asphalt-area' | 'grass';
 interface Feature { id: string; geom: 'area' | 'line'; cls: SurfaceClass | null; pts: number[]; w?: number }
 
 // ------------------------------------------------------------------------------------------------- what each class is
 /** laterite: the red-brown compacted earth of Legon's paths and lanes */
 const earthTex = () => canvasTex(256, (g, s) => {
-  g.fillStyle = '#9a5a39'; g.fillRect(0, 0, s, s);
-  for (let i = 0; i < 9000; i++) { g.fillStyle = ['#8a4f32', '#a8673f', '#b07450', '#7d4a30', '#c08860'][(rnd() * 5) | 0]; const r = 0.6 + rnd() * 2.2; g.fillRect(rnd() * s, rnd() * s, r, r); }
-  // worn, lighter tracks and a few stones
-  g.globalAlpha = 0.12; g.fillStyle = '#d2a07a';
-  for (let i = 0; i < 12; i++) g.fillRect(rnd() * s, 0, 6 + rnd() * 14, s);
-  g.globalAlpha = 1;
+  // dusty red-brown laterite (the owner's satellite pictures of Pent and TF): soft lighter and darker patches, fine grit,
+  // a few stones; no bands, so a large field reads as ground, not boards
+  g.fillStyle = '#a7714f'; g.fillRect(0, 0, s, s);
+  for (let i = 0; i < 40; i++) {
+    const x = rnd() * s, y = rnd() * s, r = 12 + rnd() * 40, light = rnd() < 0.5;
+    for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) {
+      const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+      gr.addColorStop(0, light ? 'rgba(214,170,128,0.35)' : 'rgba(120,72,46,0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+    }
+  }
+  for (let i = 0; i < 9000; i++) { g.fillStyle = ['#94603f', '#b07d58', '#bb8a64', '#8a5839', '#c79b74'][(rnd() * 5) | 0]; const r = 0.6 + rnd() * 1.6; g.fillRect(rnd() * s, rnd() * s, r, r); }
   for (let i = 0; i < 60; i++) { g.fillStyle = ['#cfc3b2', '#8d8478'][(rnd() * 2) | 0]; g.fillRect(rnd() * s, rnd() * s, 2 + rnd() * 2, 2 + rnd() * 2); }
 });
 const gravelTex = () => canvasTex(256, (g, s) => {
@@ -55,17 +61,21 @@ interface Look { tex: () => THREE.Texture; scale: number; color?: string; h: num
 const LOOKS: Record<SurfaceClass, Look> = {
   // car parks: a light, worn asphalt (the original's car-park concrete read as asphalt from the ground); pavers where
   // the owner's photos show them
-  'parking': { tex: () => asphaltTexture(false), scale: 6, color: '#cfcfcf', h: 0.028 },
-  'parking-pavers': { tex: () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92'], '#5f5d58', ['#b9b2a6', '#4f4c47']), scale: 1.6, h: 0.028 },
+  // (the same surface as the original's own car parks, world.ts: its concrete texture tinted #b9bbbf, 5 m a picture, the
+  // owner, 2026-10-19: "the sidewalk and car park have same design")
+  'parking': { tex: concreteTexture, scale: 5, color: '#b9bbbf', h: 0.036 },
+  'parking-pavers': { tex: () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92'], '#5f5d58', ['#b9b2a6', '#4f4c47']), scale: 1.6, h: 0.036 },
   'plaza': { tex: slabTex, scale: 2.4, h: 0.026 },
   // walkways of interlocking pavers: red-brown (the owner: "brown or reddish pedestrian walkways")
   'pavers-walk': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.032 },
   'pavers-road': { tex: () => paverTexture(['#7f4634', '#8a4f3a', '#74402f', '#915741', '#7a4433'], '#57392c', ['#a87a62', '#4a2a1f']), scale: 1.6, h: 0.032 },
-  'earth': { tex: earthTex, scale: 6, h: 0.028 },
+  'earth': { tex: earthTex, scale: 14, h: 0.028 },
   'gravel': { tex: gravelTex, scale: 3, h: 0.028 },
   'concrete-walk': { tex: concreteSlabTex, scale: 1.5, h: 0.032 },
   'concrete-road': { tex: concreteSlabTex, scale: 4, h: 0.032 },
   'asphalt-walk': { tex: () => asphaltTexture(false), scale: 6, color: '#dedede', h: 0.032 },
+  // (a drive or lane the map leaves out, the campus roads' own asphalt: the owner's satellite pictures)
+  'asphalt-area': { tex: () => asphaltTexture(), scale: 8, color: '#e6e6e6', h: 0.03 },
   'grass': { tex: grassTexture, scale: 8, color: '#e4e0cc', h: 0.032 },
 };
 let mats: Partial<Record<SurfaceClass, THREE.MeshStandardMaterial>> = {};

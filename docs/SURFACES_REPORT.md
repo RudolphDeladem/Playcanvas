@@ -92,7 +92,22 @@ What the game draws now:
 - **Verges and drains:** the original's own concrete verges and open drains along the main roads
   (`world.ts buildRoadEdges`) are tagged `verge` at conversion and never drawn.
 
-Code: `roadedges.ts` (`sidewalkSides`, the bands, `nearPark`).
+- **Dr. J.B. Danquah Avenue's median** (the owner's satellite picture of the road from the main gate to Commonwealth
+  Hall, 2026-10-19), between the two carriageways of the road:
+  - a row of lawn islands, each kerbed in white stone with rounded ends (a smooth minimum of the median and the roads
+    crossing it, about 8 m round);
+  - a row of clipped round shrubs down the middle of each island, 2.4 m apart, and no trees;
+  - asphalt where a road crosses the median;
+  - a paved strip where a footpath crosses it, with a zebra crossing on each carriageway.
+- **The Balme Library's forecourt** (the same day's satellite picture of the library): the two beds either side of the
+  forecourt, between the car parks and the road, are car parks too, as the picture shows (`classify.mjs`
+  `OWNER_AREAS`). They have the original's own car-park surface (its concrete texture and tint), so the old and new
+  parts read as one car park, and they run to the road with no grass between. The shrubs there are gone; the lane
+  rows past the square keep theirs.
+
+Code: `roadedges.ts` (`sidewalkSides`, `medianAt`, `medianHedges`, `zebras`, the bands, `nearPark`), `shrubs.ts`,
+`vegrules.ts` (no trees in the median).
+
 
 ## 4. Ground surfaces
 
@@ -165,6 +180,31 @@ Corrections in this pass:
 - **Not done: evidence-based tree placement campus-wide.** The original's street trees are generated along the roads,
   22–34 m apart. No tree survey or high-resolution canopy layer is available to place them one by one. ESA WorldCover
   (10 m) is too coarse for single trees.
+
+## The owner's ground corrections from satellite pictures (2026-10-19)
+
+Each correction is an explicit owner area in `tools/surfaces/classify.mjs` (`OWNER_AREAS`, conf `owner`), drawn by
+`surfaces.ts`. The pictures were pinned to the game frame with roads, fences and building corners; positions are good
+to a few metres.
+
+- **Aerial view 16, the owner's outline:** the yard round the car park and the long sheds west of the tree grove, from
+  the road to the grove, is paved with the car-park surface.
+- **Aerial view 18 (round Legon Hall):**
+  - the E-W road north of the hall is asphalt, not the pavers its OSM tag (`paving_stones`, way 278303117) gave it;
+  - the hall's two round drives west and east, with their lanes to the N-S roads, are asphalt with lawn islands;
+  - car parks south-west of the hall, south of it, and either side of the entrance garden;
+  - the bare red earth field east of the east road.
+- **New Pent:**
+  - the field east of the middle road, south of its tree row, is bare earth, with the pale heap of sand or gravel on it;
+  - the east blocks' car park west of them is one asphalt area;
+  - cars park along the north side of the bottom road.
+- **TF Hostel:**
+  - the yard between the north fence and the north block is a compacted parking yard;
+  - the strips inside the east and south fences are bare earth.
+- **The earth texture** is now a dusty red-brown with soft patches, 14 m a picture, without the streaks that made large
+  areas read as boards.
+- **The median design** (kerbed lawn islands, hedges, zebras) applies to Dr. J.B. Danquah Avenue only. The N4's median
+  is the original's.
 
 ## Aerial views for the owner's review
 
