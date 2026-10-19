@@ -24,6 +24,8 @@ interface LoadedTile { key: string; info: TileInfo; root: pc.Entity; lodNodes: {
 
 export class Campus {
   readonly ready: Promise<void>;
+  /** lift the ground layers apart (see build); false shows the campus as first converted, for comparisons */
+  liftLayers = true;
   /** instanced parts (trees, posts) left out where this says so: the game's widened roads and sidewalks */
   dropInstance?: (x: number, z: number) => boolean;
   /** called with 0..1 while the first tiles round the start load */
@@ -313,7 +315,13 @@ export class Campus {
         mesh.aabb = new pc.BoundingBox(new pc.Vec3(0.5, 0.5, 0.5), new pc.Vec3(0.5, 0.5, 0.5));
         const e = new pc.Entity();
         const [x0, y0, z0] = h.box;
-        e.setLocalPosition(x0, y0, z0);
+        // a ground layer the original kept apart from the one under it by a depth bias (car parks, plazas and paths over
+        // the grass, roads over paths, paint over roads) is also lifted a little, in the same order: PlayCanvas applies
+        // most of a bias by the surface's slope to the view, so seen from straight above (the fly-over, the drone, far
+        // away) the grass came through the car parks and the plazas
+        const po = this.manifest.materials[h.m]?.po;
+        const lift = po && this.liftLayers ? Math.min(0.06, Math.max(0, -po[1] * 0.005 - po[0] * 0.002)) : 0;
+        e.setLocalPosition(x0, y0 + lift, z0);
         e.setLocalScale(sx, sy, sz);
         const mi = new pc.MeshInstance(mesh, mat);
         (mi as any)._matId = h.m;

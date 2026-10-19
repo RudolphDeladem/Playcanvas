@@ -14,16 +14,14 @@
 // Cells wholly inside one band are merged into strips, and the raised bands get vertical faces along their outlines.
 // Tiles are built round the camera a few milliseconds a frame and dropped behind it.
 import * as THREE from '../engine/lite3';
-import { buildingAt, NODE_XZ, PLACES, ROADS } from './campusmap';
+import { AREAS, buildingAt, NODE_XZ, PLACES, ROADS } from './campusmap';
 import { ROAD_WIDTH } from './life';
-import { groundHeight, inStairs } from './relief';
-import { inCutBand } from './cutplan';
-import { ownsEdges } from './ipsplan';
-import { offAsphalt } from './science';
-import { NSIA } from './nsia';
-import { KQ } from './kuffour';
+import { groundHeight } from './relief';
 import { meshBlocked } from './collision';
 import { asphaltTexture } from './textures';
+import { canvasTex, paverTexture, rnd } from './groundtex';
+import { excludedAll } from './groundrules';
+import { unpavedAt } from './surfaces';
 
 // ------------------------------------------------------------------------------------------------- the section
 /** across the road edge (m, from the asphalt's edge outward) and heights above the ground */
@@ -38,7 +36,7 @@ const ROUND = 4;
 const TILE = 64, CELL = 1, N = TILE / CELL;
 
 // ------------------------------------------------------------------------------------------------- the roads
-interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number }
+interface Seg { ax: number; az: number; bx: number; bz: number; w: number; g: number; w0?: number }
 const main: Seg[] = [], side: Seg[] = [], path: Seg[] = [];
 const GRID = 16, REACH = 12;
 const gkey = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
@@ -58,7 +56,14 @@ function prepare() {
   const parent = ROADS.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   const ends = new Map<number, number[]>();
-  const isMain = ROADS.map((r) => r.cls <= 2 && !(r.name == null && r.nodes.some((n) => intoHall(NODE_XZ[n * 2], NODE_XZ[n * 2 + 1]))));
+  // (a road whose mapped surface is pavers, earth, gravel or concrete, surfaces.ts, keeps that surface: no asphalt or
+  // sidewalks laid over it)
+  const unpaved = (r: (typeof ROADS)[number]) => {
+    let on = 0, n = 0;
+    for (let k = 0; k < r.nodes.length - 1; k++) { const a = r.nodes[k], b = r.nodes[k + 1]; n++; if (unpavedAt((NODE_XZ[a * 2] + NODE_XZ[b * 2]) / 2, (NODE_XZ[a * 2 + 1] + NODE_XZ[b * 2 + 1]) / 2)) on++; }
+    return n > 0 && on / n >= 0.6;
+  };
+  const isMain = ROADS.map((r) => r.cls <= 2 && !(r.name == null && r.nodes.some((n) => intoHall(NODE_XZ[n * 2], NODE_XZ[n * 2 + 1]))) && !unpaved(r));
   ROADS.forEach((r, ri) => {
     if (!isMain[ri]) return;
     for (const n of r.nodes) { let l = ends.get(n); if (!l) ends.set(n, (l = [])); l.push(ri); }
@@ -74,7 +79,7 @@ function prepare() {
     if (isMain[ri]) { const root = find(ri); g = gid.get(root) ?? gid.set(root, groups++).get(root)!; }
     for (let k = 0; k < r.nodes.length - 1; k++) {
       const a = r.nodes[k], b = r.nodes[k + 1];
-      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g };
+      const s: Seg = { ax: NODE_XZ[a * 2], az: NODE_XZ[a * 2 + 1], bx: NODE_XZ[b * 2], bz: NODE_XZ[b * 2 + 1], w, g, w0: w / WIDEN };
       list.push(s);
       const grid = grids[list === main ? 0 : list === side ? 1 : 2];
       const x0 = Math.floor((Math.min(s.ax, s.bx) - REACH) / GRID), x1 = Math.floor((Math.max(s.ax, s.bx) + REACH) / GRID);
@@ -82,6 +87,24 @@ function prepare() {
       for (let i = x0; i <= x1; i++) for (let j = z0; j <= z1; j++) { const key = gkey(i, j); let c = grid.get(key); if (!c) grid.set(key, (c = [])); c.push(s); }
     }
   });
+  // a dual carriageway keeps its mapped width: widened, its two roads and their sidewalks would close over the median
+  // (the lawn between them, as before the Balme Library); so does any road running alongside another this closely
+  const narrow = new Set<Seg>();
+  for (const s of main) {
+    const dx = s.bx - s.ax, dz = s.bz - s.az, L = Math.hypot(dx, dz);
+    if (L < 1) continue;
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    for (const o of grids[0].get(gkey(Math.floor(mx / GRID), Math.floor(mz / GRID))) ?? []) {
+      if (o === s) continue;
+      const ox = o.bx - o.ax, oz = o.bz - o.az, OL = Math.hypot(ox, oz);
+      if (OL < 1 || Math.abs((dx * ox + dz * oz) / (L * OL)) < 0.9) continue;
+      // (beside it, not further along the same line: the midpoint falls inside the other segment, off to one side)
+      const t = ((mx - o.ax) * ox + (mz - o.az) * oz) / (OL * OL), off = Math.abs((mx - o.ax) * oz - (mz - o.az) * ox) / OL;
+      if (t <= 0.02 || t >= 0.98 || off < 3) continue;
+      if (off < s.w + o.w + 2 * WALK + 2) { narrow.add(s); narrow.add(o); }
+    }
+  }
+  for (const s of narrow) s.w = s.w0 ?? s.w;
 }
 
 function segDist(s: Seg, x: number, z: number) {
@@ -115,51 +138,35 @@ function plainField(kind: 1 | 2, x: number, z: number) {
   return f;
 }
 
-/** nowhere near a main road's edges is drawn here */
-const plain = (x: number, z: number) => [NSIA.plain, ...KQ.plain].some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
-const excludedAll = (x: number, z: number) => plain(x, z) || ownsEdges(x, z) || inCutBand(x, z, 1) || inStairs(x, z) || offAsphalt(x, z);
+/** inside a mapped car park or plaza (their own paving runs up to the road: no lip, gutter or sidewalk across it) */
+const hardGrid = new Map<number, number[][]>();
+let hardReady = false;
+function inHardArea(x: number, z: number) {
+  if (!hardReady) {
+    hardReady = true;
+    for (const a of AREAS) {
+      if (a.kind !== 'parking' && a.kind !== 'plaza') continue;
+      const p = Array.from(a.pts);
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); z0 = Math.min(z0, p[i + 1]); z1 = Math.max(z1, p[i + 1]); }
+      for (let i = Math.floor(x0 / GRID); i <= Math.floor(x1 / GRID); i++) for (let j = Math.floor(z0 / GRID); j <= Math.floor(z1 / GRID); j++) { const k = gkey(i, j); let l = hardGrid.get(k); if (!l) hardGrid.set(k, (l = [])); l.push(p); }
+    }
+  }
+  for (const p of hardGrid.get(gkey(Math.floor(x / GRID), Math.floor(z / GRID))) ?? []) {
+    let c = false;
+    for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) if ((p[i + 1] > z) !== (p[j + 1] > z) && x < ((p[j] - p[i]) * (z - p[i + 1])) / (p[j + 1] - p[i + 1]) + p[i]) c = !c;
+    if (c) return true;
+  }
+  return false;
+}
+
 /** no lip, gutter or sidewalk through a building or along a wall (a lamp post or a sign is not a wall: most of the
  *  cell must be blocked) */
-const excludedEdge = (x: number, z: number) => !!buildingAt(x, z, 0.3) || [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]].filter(([a, b]) => meshBlocked(x + a, z + b, 0)).length >= 3;
+const excludedEdge = (x: number, z: number) => !!buildingAt(x, z, 0.3) || inHardArea(x, z) || [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]].filter(([a, b]) => meshBlocked(x + a, z + b, 0)).length >= 3;
 
 // ------------------------------------------------------------------------------------------------- materials
-function canvasTex(size: number, draw: (g: CanvasRenderingContext2D, s: number) => void) {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  draw(c.getContext('2d')!, size);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
-}
-let rs = 1234;
-const rnd = () => ((rs = (rs * 1664525 + 1013904223) >>> 0) / 4294967296);
-/** grey concrete pavers, 200 x 100 mm, in herringbone, dark joints, a little red dust; 1.6 m a picture (the owner's photos) */
-const herringbone = () => canvasTex(512, (g, s) => {
-  const u = s / 16; // a brick is 2u x 1u, the pattern repeats every 4u: four repeats a picture
-  g.fillStyle = '#5f5d58'; // the joints
-  g.fillRect(0, 0, s, s);
-  const bricks = ['#8f8d87', '#97948d', '#868480', '#9d9a92', '#8a877f', '#93908a', '#7f7d78'];
-  const brick = (x: number, y: number, w: number, h: number) => {
-    for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) {
-      const px = x * u + ox, py = y * u + oy;
-      if (px > s || py > s || px + w * u < 0 || py + h * u < 0) continue;
-      g.fillStyle = bricks[(rnd() * bricks.length) | 0];
-      g.fillRect(px + 1.2, py + 1.2, w * u - 2.4, h * u - 2.4);
-      // worn tops: a lighter dusty patch and the odd dark stain
-      g.globalAlpha = 0.16; g.fillStyle = rnd() < 0.7 ? '#b9b2a6' : rnd() < 0.5 ? '#8c6a55' : '#4f4c47';
-      g.fillRect(px + 2 + rnd() * w * u * 0.5, py + 2 + rnd() * h * u * 0.4, w * u * 0.35, h * u * 0.35);
-      g.globalAlpha = 1;
-    }
-  };
-  // the herringbone: horizontal bricks at (t, t) and vertical ones at (t, t + 1), the staircase repeated every (2, -2)
-  for (let a = -8; a < 24; a++) for (let b = -8; b < 8; b++) {
-    const x = a + 2 * b, y = a - 2 * b;
-    brick(x, y, 2, 1);
-    brick(x, y + 1, 1, 2);
-  }
-});
+/** the sidewalks' grey concrete pavers, dark joints, a little red dust (the owner's photos) */
+const herringbone = () => paverTexture(['#8f8d87', '#97948d', '#868480', '#9d9a92', '#8a877f', '#93908a', '#7f7d78'], '#5f5d58', ['#b9b2a6', '#b9b2a6', '#8c6a55', '#4f4c47']);
 /** the gutter's floor: dark, damp concrete with silt */
 const gutterTex = () => canvasTex(128, (g, s) => {
   g.fillStyle = '#26241f'; g.fillRect(0, 0, s, s);

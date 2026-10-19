@@ -15,6 +15,7 @@ import { groundFrom, groundHeight, inStairs, layerHeight } from './relief';
 import { deckAt } from './cutplan';
 import { RoadEdges, edgeLift, onEdges } from './roadedges';
 import { SOLIDS } from './solids';
+import { Surfaces, onHardSurface } from './surfaces';
 import { buildRouteLayer, disposeLayer, lampGlow, LANES, ROAD_HALF } from './world';
 import { AREAS, buildingAt, buildingNear, mapBounds, roadAt } from './campusmap';
 import { inPassage, solidAt } from './solids';
@@ -302,7 +303,7 @@ function freeBlocked(x: number, z: number) {
   if (onEdges(x, z)) return false;
   // trunks, posts and what the models draw at bike height (walls, fences, parked cars, planters) stop it everywhere,
   // on the roads too; the map's building outlines only off the roads (some reach a little over a road's edge)
-  if (solidAt(x, z, 0.3) || meshBlocked(x, z)) return true;
+  if (solidAt(x, z, 0.3) || (meshBlocked(x, z) && !nearCleared(x, z))) return true;
   if (roadClearance(x, z, 6, -1, true) <= 0) return false;
   if (buildingNear(x, z, 0.35) && !inPassage(x, z)) return true;
   if (!wilds) {
@@ -315,6 +316,19 @@ function freeBlocked(x: number, z: number) {
   return wilds.some((w) => x > w.x0 && x < w.x1 && z > w.z0 && z < w.z1 && inPts(w.pts, x, z));
 }
 let bounds: ReturnType<typeof mapBounds> | null = null;
+
+/** where the campus's trees and shrubs were left out (on the widened roads, the sidewalks and the corrected hard
+ *  surfaces): their trunks are still in the collision raster, which the free ride then ignores within 0.8 m */
+const cleared = new Map<number, number[]>();
+const ckey = (x: number, z: number) => (Math.floor(x / 8) + 4096) * 8192 + (Math.floor(z / 8) + 4096);
+function clear(x: number, z: number) { const k = ckey(x, z); let l = cleared.get(k); if (!l) cleared.set(k, (l = [])); l.push(x, z); }
+function nearCleared(x: number, z: number) {
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const l = cleared.get(ckey(x + i * 8, z + j * 8));
+    if (l) for (let k = 0; k < l.length; k += 2) if (Math.hypot(l[k] - x, l[k + 1] - z) < 0.8) return true;
+  }
+  return false;
+}
 
 const GRAVITY = 22;
 const JUMP_V = 7;
@@ -336,6 +350,8 @@ export class Game {
   readonly campus: Campus;
   /** the roads' asphalt, gutters and sidewalks round the camera (roadedges.ts) */
   private edges: RoadEdges;
+  /** the ground surfaces corrected from the evidence (surfaces.ts) */
+  private surfaces: Surfaces;
   private cine = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
   private rider: RiderRig;
   private route: Route = CAMPUS_LOOP;
@@ -490,13 +506,17 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 1200, this.engine.camera);
     this.campus = new Campus(this.engine);
     // the campus's trees and posts that would stand in the widened roads and their sidewalks are left out (roadedges.ts)
-    this.campus.dropInstance = (x, z) => onEdges(x, z, 0.4);
+    // (and so are those on the corrected car parks, plazas and paths, surfaces.ts)
+    this.campus.dropInstance = (x, z) => { const drop = onEdges(x, z, 0.4) || onHardSurface(x, z); if (drop) clear(x, z); return drop; };
     // the campus's lit windows and lamps follow the night switch (life.ts setNightLights)
     nightHooks.push((on) => this.campus.setNight(on, this.lampLevel));
 
     // (no grass tufts: the owner's corrections, 2026-10-18)
     this.edges = new RoadEdges();
     this.scene.add(this.edges.group);
+    // the corrected ground surfaces: car parks, plazas, paver, earth and gravel paths (surfaces.ts)
+    this.surfaces = new Surfaces();
+    this.scene.add(this.surfaces.group);
     this.setRoute(CAMPUS_LOOP);
     this.scene.add(this.dynamic);
 
@@ -535,7 +555,7 @@ export class Game {
     this.campus.onProgress = (f) => this.progress(0.95 * f);
     await Promise.all([this.campus.preload(p.x, p.z, this.lowEnd ? 200 : 260), loadCollision()]);
     // (and so are their trunks, for the free ride)
-    SOLIDS.filter((x, z) => !onEdges(x, z, 0.4));
+    SOLIDS.filter((x, z) => !onEdges(x, z, 0.4) && !onHardSurface(x, z));
     // (the road edges round the start, once the collision data is in: they keep clear of walls)
     this.edges.preload(p.x, p.z);
     T('campus', t0);
@@ -2184,6 +2204,7 @@ export class Game {
   private draw(cam: THREE.PerspectiveCamera) {
     this.campus.update(cam.position.x, cam.position.z);
     this.edges.update(cam.position.x, cam.position.z);
+    this.surfaces.update(cam.position.x, cam.position.z);
     THREE.Sprite.face(this.engine.camera);
     this.engine.app.renderNextFrame = true;
   }
